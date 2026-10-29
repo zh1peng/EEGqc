@@ -87,6 +87,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.view_revision = 0
         self.rendered_state = None
         self.rendered_view_revision = -1
+        self._navigator_review = None
         self.property_request = 0
         self.ic_property_request = 0
         self.jobs = Jobs(self)
@@ -512,6 +513,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.task_result.hide()
         self.pending_task_candidate = None
         self.session = Session(ds)
+        self._navigator_review = None
         self.current_epoch = self.first_epoch = self.continuous_start = 0
         self.topos.clear()
         self.interval_selection = None
@@ -871,7 +873,21 @@ class MainWindow(QMainWindow, WorkflowActions):
             self.epoch_summary.setText(
                 f"连续数据 · {len(s.review.intervals)} 个时间标记 · 拖动蓝色选择范围后标记"
             )
-        for i in range(self.navigator.count()):
+        previous = self._navigator_review
+        if previous is s.review:
+            changed_epochs = ()
+        elif previous is None or previous.processing != s.review.processing:
+            changed_epochs = range(self.navigator.count())
+        elif previous.decisions is s.review.decisions:
+            changed_epochs = ()
+        else:
+            previous_decisions = dict(previous.decisions)
+            changed_epochs = (
+                i
+                for i in previous_decisions.keys() | decisions.keys()
+                if previous_decisions.get(i) is not decisions.get(i)
+            )
+        for i in changed_epochs:
             item = self.navigator.item(i)
             d = decisions.get(i)
             stale_item = d is not None and d.processing != s.review.processing
@@ -882,6 +898,7 @@ class MainWindow(QMainWindow, WorkflowActions):
                 item.setForeground(QColor(color))
                 item.setBackground(QColor("#563c40") if i in rejected else QColor("#2b333d"))
                 item.setToolTip(f"Epoch {i + 1} · {state}")
+        self._navigator_review = s.review
         for radio in self.ratings.buttons():
             radio.blockSignals(True)
             radio.setChecked(radio.text() == s.review.rating)

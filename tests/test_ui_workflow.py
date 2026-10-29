@@ -147,11 +147,14 @@ def test_new_decomposition_stays_candidate_and_old_decision_needs_review(monkeyp
     assert "待复核" in window.navigator.item(0).toolTip()
     window.mark_selected(False)
     assert dict(window.session.review.decisions)[0].processing.decomposition_id == new.decomposition_id
+    assert "已确认保留" in window.navigator.item(0).toolTip()
     window.restore_reference()
     assert window.session.review.rejected == {0}
     assert window.session.ica_for() is ds.ica
+    assert "已拒绝" in window.navigator.item(0).toolTip()
     window._history(False)
     assert window.session.ica_for() is new
+    assert "已确认保留" in window.navigator.item(0).toolTip()
     wait_for_view(app, window)
     window.close()
 
