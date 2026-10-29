@@ -518,6 +518,8 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.jobs.submit("load", lambda: load_set(path), self.set_dataset)
 
     def set_dataset(self, ds):
+        if not self._autosave():
+            return
         self.jobs.invalidate()
         self.property_jobs.invalidate()
         self.long_tasks.invalidate()

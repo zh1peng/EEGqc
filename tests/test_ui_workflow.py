@@ -31,6 +31,29 @@ def wait_for_view(app, window):
     raise AssertionError("The requested scientific view did not finish")
 
 
+def test_dataset_switch_preserves_edits_made_after_loading_started(tmp_path):
+    import json
+
+    app = QApplication.instance() or QApplication([])
+    configure_app(app)
+    window = MainWindow()
+    window.set_dataset(make_demo(18, 3, 100.0, 1.0))
+    source_id = window.session.dataset.data_id
+    record = tmp_path / "first.eegqc.json"
+    window.session_path = record
+    assert window.save()
+    # Opening a file saves first, but the reader can finish before the 700 ms
+    # autosave for a later edit. Replacing the session must preserve that edit.
+    window.session.mark([0], True)
+    window._changed()
+    window.set_dataset(make_demo(18, 3, 100.0, 1.0, seed=18))
+    saved = json.loads(record.read_text(encoding="utf-8"))
+    assert saved["data_id"] == source_id
+    assert [(i, d["rejected"]) for i, d in saved["review"]["decisions"]] == [(0, True)]
+    assert window.session.dataset.data_id != source_id
+    window.close()
+
+
 def test_displayed_erp_and_label_context_follow_the_view_actually_seen():
     app = QApplication.instance() or QApplication([])
     configure_app(app)
