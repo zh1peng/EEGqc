@@ -1,5 +1,6 @@
 from dataclasses import replace
 from copy import deepcopy
+import numpy as np
 
 from eegqc.core.dataset import Dataset
 from eegqc.core.preview import PreviewEngine
@@ -93,3 +94,46 @@ class Session:
     def freeze_reference(self):
         self.reference = self.review
         self.revision += 1
+
+    def restore_reference(self):
+        candidate_changed = self.candidate != self.reference.processing
+        review_changed = self.review != self.reference
+        self._commit(self.reference)
+        self.candidate = self.review.processing
+        if candidate_changed and not review_changed:
+            self.revision += 1
+
+    @property
+    def pending_review_count(self):
+        return self.review.pending_review_count
+
+    def ica_for(self, processing=None):
+        return self.dataset.ica_for(self.candidate if processing is None else processing)
+
+    def component_dataset(self, processing=None):
+        """The decomposition's scientific input, before current component exclusions."""
+        processing = self.candidate if processing is None else processing
+        ica = self.ica_for(processing)
+        if ica is None:
+            raise ValueError("This processing state has no ICA decomposition")
+        data = (
+            self.dataset.data
+            if ica.input_processing is None
+            else self.engine.source(Processing(decomposition_id=ica.decomposition_id))
+        )
+        metadata = deepcopy(self.dataset.metadata)
+        metadata.update(
+            icaweights=ica.unmixing * 1e-6,
+            icasphere=np.eye(len(ica.channels)),
+            icawinv=ica.mixing * 1e6,
+            icachansind=ica.channels.copy(),
+        )
+        return replace(self.dataset, data=data, ica=ica, metadata=metadata)
+
+    def propose_ica(self, ica):
+        if ica.fit.get("data_id") != self.dataset.data_id:
+            raise ValueError("ICA result belongs to another dataset")
+        self.dataset.validate_ica(ica)
+        self.dataset.decompositions[ica.decomposition_id] = ica
+        self.propose(Processing(decomposition_id=ica.decomposition_id, dropped=ica.input_processing.dropped))
+        self.iclabel = None
