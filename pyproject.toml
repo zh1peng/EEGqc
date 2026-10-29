@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "eegqc"
+version = "0.2.0"
+description = "Interactive EEG quality control with EEGPrep and live ERP previews"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "eegprep==0.4.0",
+  "mne>=1.13",
+  "numpy>=2.1",
+  "scipy>=1.14",
+  "PySide6-Essentials>=6.6",
+  "pyqtgraph>=0.13.7",
+  "matplotlib>=3.8",
+  "threadpoolctl>=3.5",
+]
+
+[project.scripts]
+eegqc = "eegqc.__main__:main"
+eegqc-collect = "eegqc.epochlabel.server:main"
+eegqc-epochlabel-train = "eegqc.epochlabel.model:main"
+
+[project.optional-dependencies]
+iclabel = ["torch>=2.6"]
+server = ["fastapi>=0.115", "uvicorn>=0.34"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.11", "httpx>=0.28", "fastapi>=0.115"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/eegqc"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"THIRD_PARTY_NOTICES.md" = "eegqc/THIRD_PARTY_NOTICES.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.format]
+exclude = ["src/eegqc/adapters/_asr_process.py"]

@@ -1,0 +1,36 @@
+Generation mode: built-in image_gen; edit of professional workbench v2.
+Use case: ui-mockup.
+Edit target: the most recent generated EEGqc professional dark desktop workbench image in this conversation. Produce the NEXT ITERATION of the same product. Keep professional scientific capability and restrained graphite visual identity, but significantly reduce visible complexity through task-based workspaces and progressive disclosure. User approved the redesign direction and wants one design image.
+
+Deliverable: one polished high-resolution wide landscape 16:10 flat desktop application screenshot, the interface fills frame, no mockup hardware, no marketing, no exploded views, no explanatory callouts outside the app. Chinese interface, highly legible typography. Aim for a real refined professional tool, spacious compared with previous version while retaining powerful features behind explicit entry points.
+
+Visual style: quiet charcoal header and side inspector (#292d33), slightly lighter inspector sections, off-white main scientific canvas, soft light gray text on dark surfaces, dark fine EEG traces on white, single restrained desaturated cyan accent. Coral only for rejection. Thin neutral dividers instead of boxed panels everywhere. Compact modest 4px corners; no glowing outlines, gradients, chunky cards or huge dashboard numbers. Clear visual hierarchy, comfortable 12–20px spacing between control groups. Main waveform must dominate. Mixed Chinese and English scientific terms naturally. Elegant intentional alignment, sophisticated functional UI.
+
+Product architecture visible in image:
+- Small top menu bar: EEGqc logo, “文件”, “编辑”, “视图”, “算法”, “帮助”; right “已自动保存” quiet status and settings icon.
+- Below a clear WORKSPACE SWITCHER integrated into a modest horizontal header: “Epoch 检查” active with thin cyan underline, “通道检查”, “IC 检查”, “结果复核”. At far right compact “布局 ▾”. This switcher is the primary navigation hierarchy. No visible algorithm catalog or history table.
+- A single dataset context row below: left folder icon and button “数据集 3 / 24 ▾”, then “sub-003.set” in medium weight, metadata “64 通道 · 500 Hz · 240 epochs”. Small previous and next dataset chevrons. The dataset queue is CLOSED, not permanently consuming a sidebar.
+- Main body consists of LARGE central plotting workspace about 78% width and ONE right contextual inspector about 22% width. No left file sidebar, no left channel table, no vertical icon rail, no scalp maps, no PSD or ERP panels in this Epoch workspace.
+
+Central workspace details:
+1. One restrained toolbar above waveform: selected “选择” tool, “标记坏 epoch” button, undo icon; separated group “50 μV ▾”, “16 通道 ▾”, “显示滤波：关闭 ▾”; at far right small “辅助检测 ▾” action. Tools are understated and grouped, no abundance of cyan borders.
+2. White EEG canvas occupies about 60% of entire screenshot height. Panel title at top left “Epoch 081–085” and tiny top-right “添加视图 +” icon/button, subtle expand icon.
+3. Plot 16 stacked scientifically plausible EEG channels with evenly spaced readable labels Fp1, Fp2, F3, F4, F7, F8, Fz, C3, C4, Cz, P3, P4, Pz, O1, O2, Oz. Gray hairline baselines and minimal grid. Five equal epoch columns separated by subtle vertical boundaries, each 1 second long from −200 to 800 ms relative to an event. Header labels 081, 082, 083, 084, 085 across columns. Each column has only −200, 0, 800 repeated tick labels at its bottom, with a clear overall axis caption “相对事件时间 (ms)”. Do not draw a continuous seconds axis across these separate epochs. Realistic varied oscillatory signals, brief frontal blink in epoch 084 with much smaller effect in posterior channels. Epoch 084 alone has very subtle pale coral background with small top label “084 · 已标记”, waveform stays clearly visible. Fine zero-time event lines in each epoch. Include small accurate visual amplitude scale “50 μV”. No traces overlapping UI.
+4. Under the plot a narrow light overview strip titled “Epoch 导航”, consisting of two rows of tiny neutral uniform epoch cells (representing all 240 trials), several coral rejection cells and a cyan outline selecting current 081–085 group. Labels 1, 60, 120, 180, 240 distributed appropriately. Short legend “未标记” neutral dot, “已标记” coral dot. Prev and next page chevrons at far right. This is a compact navigational strip, not a rainbow heatmap. Modest footer hint “拖动选择 · B 标记 / 取消 · Ctrl+Z 撤销”.
+5. Tiny text below navigator “已标记 12 / 240 epochs · 5.0%”, clearly distinguished from currently focused epoch.
+
+Right inspector:
+- Title “当前 Epoch” with subtitle “084 / 240”.
+- Under a fine divider, status “已标记为坏” with small coral status indicator and an understated “取消标记” button.
+- “标记原因” dropdown set to “眨眼 / 眼动”.
+- “备注” small multi-line field containing “额区明显瞬态伪迹”.
+- A compact read-only “检查信息” section with just “原始 TrialID    084”, “事件类型    target”. Avoid invented scalar quality scores.
+- One collapsed accordion “相关视图” with chevron and quiet subtitle “通道属性 · IC · 前后对比”. This shows access to additional evidence without expanding it.
+- One collapsed accordion “历史记录” with “4 步操作” on the right.
+- Intentional breathing room below, do NOT fill with extra plots, algorithm lists or metrics.
+- At inspector bottom a subdued contextual action “清除全部 epoch 标记…” secondary text, not prominent.
+
+Bottom application completion bar, single clean row about 64px high:
+left “数据集评级” radio choices “可用”, “待复核” selected, “不可用”; adjacent small note icon “数据集备注”.
+right subtle “保存设置” gear button, regular “保存” button and ONE modest cyan primary “保存并下一份 →”. No permanent output-path, prefix, log export fields. A very thin bottom status line “决策已保存 · 原始数据未修改” and “本地工作区”.
+Keep only one primary colored action. The image must feel visibly calmer than previous version while still communicating configurable professional workstation structure. Do not show all available functionality simultaneously. No multi-rater tools. No scientific claims: demonstration data only.
