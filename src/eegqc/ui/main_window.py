@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QStackedWidget,
@@ -216,7 +217,15 @@ class MainWindow(QMainWindow, WorkflowActions):
         footer.addWidget(button("保存记录", self.save))
         footer.addWidget(button("保存并下一份 →", self.save_next, True))
         layout.addLayout(footer)
-        self.setCentralWidget(root)
+        root.setObjectName("qcBody")
+        root.setStyleSheet("QWidget#qcBody { background: #262c34; }")
+        central = QScrollArea()
+        central.setFrameShape(QScrollArea.Shape.NoFrame)
+        central.setWidgetResizable(True)
+        central.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        central.setMinimumHeight(self.waveform.minimumHeight())
+        central.setWidget(root)
+        self.setCentralWidget(central)
         self._inspector()
         self._erp_dock()
 
@@ -462,7 +471,9 @@ class MainWindow(QMainWindow, WorkflowActions):
         layout.addLayout(advanced)
         self.erp_plot = plot("未载入分段数据")
         self.erp_plot.setMinimumHeight(160)
+        self.erp_plot.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self.erp_plot.setLabel("bottom", "相对事件时间", units="ms")
+        self.erp_plot.getAxis("bottom").enableAutoSIPrefix(False)
         self.erp_plot.setLabel("left", "振幅", units="μV")
         self.erp_plot.getAxis("left").enableAutoSIPrefix(False)
         self.erp_legend = self.erp_plot.addLegend(offset=(12, 10), colCount=2, labelTextSize="9pt")
@@ -850,7 +861,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.average_ref.setChecked(s.candidate.average_reference)
         self.average_ref.blockSignals(False)
         self.processing_label.setText(
-            "输入：原始科学数据\n已采用："
+            "输入：导入时的数据\n已采用："
             + self._describe(s.review.processing)
             + ("\n候选：" + self._describe(s.candidate) if pending else "")
             + "\n固定参考："

@@ -17,7 +17,9 @@ hidden = [eegprep._LAZY_EXPORTS[name][0] for name in exports]
 hidden += collect_submodules("eegqc", filter=lambda n: n != "eegqc.epochlabel.server")
 hidden += collect_submodules("mne", filter=lambda n: ".tests" not in n and not n.startswith("mne.commands"))
 datas = collect_data_files("eegprep") + collect_data_files("mne")
-datas += copy_metadata("eegprep") + copy_metadata("mne") + copy_metadata("eegqc")
+# Keep the distributed runtime versions and their bundled license material,
+# including Qt/PySide and CPU ICLabel's dependencies, with the application.
+datas += copy_metadata("eegqc", recursive=True) + copy_metadata("torch", recursive=True)
 datas += [(str(root / "THIRD_PARTY_NOTICES.md"), "eegqc")]
 
 a = Analysis(
