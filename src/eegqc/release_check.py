@@ -261,6 +261,18 @@ def workflow(app, args):
                 "interval_export": "passed",
                 "remaining_samples": actual.data.shape[2],
             }
+        window.open_demo()
+        wait(
+            app,
+            lambda: window.session.dataset.source is None and "合成" in window.session.dataset.name,
+            window,
+        )
+        draw(app, window)
+        demo = window.session.dataset
+        assert demo.n_channels == 64 and demo.n_epochs == 240 and demo.ica is not None
+        assert np.isfinite(demo.data).all() and "合成演示" in window.context.text()
+        window.grab().save(str(args.output / "offline-demo.png"))
+        result["offline_demo"] = {"shape": list(demo.data.shape), "explicitly_synthetic": True}
         return result
     finally:
         window.close()

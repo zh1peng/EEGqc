@@ -119,7 +119,7 @@ class WorkflowActions:
         s = self.session
         processing = s.candidate
         ds = replace(s.dataset, ica=s.ica_for(processing))
-        if not self._has_locations(ds):
+        if not self._has_locations(ds, ds.ica.channels):
             self.statusBar().showMessage("ICLabel 需要电极位置；波形与人工标记仍可使用。")
             return
         if s.iclabel and s.iclabel["decomposition_id"] == ds.ica.decomposition_id:

@@ -187,4 +187,24 @@ def test_completed_task_does_not_replace_later_processing_and_basic_qc_needs_no_
     wait_for_view(app, window)
     assert "已采用" in window.property_label.text()
     assert window.channel_location.text() == "缺少电极位置"
+    source = make_demo(18, 12, 100.0, 1.0)
+    locations = [dict(loc) for loc in source.chanlocs]
+    locations[4].pop("theta")
+    locations[4].pop("radius")  # XYZ-only EEG can still be interpolated.
+    locations[-1] = {"labels": source.labels[-1], "type": "EOG"}
+    ica = replace(
+        source.ica,
+        channels=np.arange(4),
+        unmixing=source.ica.unmixing[:4, :4],
+        mixing=source.ica.mixing[:4, :4],
+    )
+    window.set_dataset(replace(source, chanlocs=locations, ica=ica))
+    assert window.channel_table.item(0, 1).flags() & Qt.ItemFlag.ItemIsUserCheckable
+    assert window.channel_table.item(4, 1).flags() & Qt.ItemFlag.ItemIsUserCheckable
+    assert not window.channel_table.item(17, 1).flags() & Qt.ItemFlag.ItemIsUserCheckable
+    assert window._has_locations(window.session.dataset, ica.channels)
+    assert not window._has_locations(window.session.dataset, [4])
+    window.set_workspace(2)
+    wait_for_view(app, window)
+    assert all(image.pixmap() is not None and not image.pixmap().isNull() for _, image in window.ic_widgets)
     window.close()

@@ -1118,19 +1118,46 @@ class MainWindow(QMainWindow, WorkflowActions):
                 item = QTableWidgetItem()
                 item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
                 item.setCheckState(Qt.CheckState.Checked if i in chosen else Qt.CheckState.Unchecked)
-                if col == 1 and not self._has_locations(ds):
-                    item.setFlags(Qt.ItemFlag.NoItemFlags)
-                    item.setToolTip("缺少电极位置；可继续波形、通道排除和人工标记")
                 self.channel_table.setItem(i, col, item)
+        self._set_interpolation_availability()
         self.channel_table.setCurrentCell(min(selected, ds.n_channels - 1), 0)
         self.channel_table.blockSignals(False)
 
     @staticmethod
-    def _has_locations(ds):
-        return len(ds.chanlocs) == ds.n_channels and all(
-            np.isfinite(loc.get("theta", np.nan)) and np.isfinite(loc.get("radius", np.nan))
-            for loc in ds.chanlocs
+    def _has_locations(ds, channels):
+        return all(
+            np.isfinite(ds.chanlocs[i].get("theta", np.nan))
+            and np.isfinite(ds.chanlocs[i].get("radius", np.nan))
+            for i in channels
         )
+
+    def _set_interpolation_availability(self):
+        ds = self.session.dataset
+        positioned = set()
+        for i, loc in enumerate(ds.chanlocs):
+            xyz = np.asarray([loc.get(key, np.nan) for key in ("X", "Y", "Z")], dtype=float)
+            if (
+                str(loc.get("type", "EEG")).upper() in ("", "EEG")
+                and np.isfinite(xyz).all()
+                and np.linalg.norm(xyz) > 0
+            ):
+                positioned.add(i)
+        chosen = set(self.session.candidate.interpolated)
+        blocked = self.channel_table.blockSignals(True)
+        for i in range(ds.n_channels):
+            item = self.channel_table.item(i, 1)
+            enabled = i in positioned and (i in chosen or len(positioned - chosen - {i}) >= 3)
+            item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
+                if enabled
+                else Qt.ItemFlag.NoItemFlags
+            )
+            item.setToolTip(
+                ""
+                if enabled
+                else "球面插值需要该 EEG 通道的有效 XYZ 和至少三个定位良好的其他 EEG 通道；波形和人工标记仍可使用。"
+            )
+        self.channel_table.blockSignals(blocked)
 
     def _channel_changed(self, item):
         if self.session is None or item.column() == 0:
@@ -1145,6 +1172,7 @@ class MainWindow(QMainWindow, WorkflowActions):
                 )
             )
         self._propose(replace(self.session.candidate, interpolated=values[0], dropped=values[1]))
+        self._set_interpolation_availability()
 
     def _request_property(self):
         if self.session is None or self.stack.currentIndex() != 1:
@@ -1160,7 +1188,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         def compute():
             values = s.engine.signal(processing, channels=[channel], display_filter=display_filter)[:, 0]
             freqs, psd = channel_spectrum(ds, values)
-            location = channel_location_thumbnail(ds, channel) if self._has_locations(ds) else None
+            location = channel_location_thumbnail(ds, channel) if self._has_locations(ds, [channel]) else None
             return freqs, psd, values * 1e6, location
 
         def display(result):
@@ -1234,7 +1262,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         components = [component for component, _ in self.ic_widgets]
         ds = replace(s.dataset, ica=s.ica_for())
         decomposition_id = ds.ica.decomposition_id
-        if not self._has_locations(ds):
+        if not self._has_locations(ds, ds.ica.channels):
             for _, image in self.ic_widgets:
                 image.setText("缺少电极位置\n仍可查看 IC 活动与属性")
             return

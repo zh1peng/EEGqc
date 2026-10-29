@@ -7,11 +7,12 @@ Run manually after relevant changes; it is deliberately not a timing assertion i
 import argparse
 from dataclasses import replace
 import json
+from importlib.metadata import version
 import os
 from pathlib import Path
 import platform
 import sys
-from time import perf_counter, sleep
+from time import perf_counter
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("MPLBACKEND", "Agg")
@@ -20,7 +21,7 @@ os.environ.setdefault("PYQTGRAPH_QT_LIB", "PySide6")
 import numpy as np
 import psutil
 import scipy.linalg  # noqa: F401 -- load both BLAS runtimes before limiting threads
-from PySide6.QtCore import QObject, QEvent, QTimer
+from PySide6.QtCore import QObject, QEvent, QEventLoop, QTimer, Signal
 from PySide6.QtWidgets import QApplication
 from threadpoolctl import threadpool_info, threadpool_limits
 
@@ -32,6 +33,8 @@ from eegqc.ui.main_window import MainWindow
 
 
 class PaintProbe(QObject):
+    finished = Signal()
+
     def __init__(self, window):
         super().__init__(window)
         self.window = window
@@ -71,16 +74,42 @@ class PaintProbe(QObject):
         self.painted.add(widget)
         if self.required <= self.painted:
             self.completed = (perf_counter() - self.started) * 1000
+            self.finished.emit()
 
 
 def wait(app, predicate, window, seconds=30):
-    deadline = perf_counter() + seconds
-    while perf_counter() < deadline:
-        app.processEvents()
+    loop = QEventLoop()
+    check, deadline = QTimer(), QTimer()
+
+    def poll():
         if predicate():
-            return
-        sleep(0.001)
-    raise RuntimeError(f"The requested view did not finish: {window.statusBar().currentMessage()}")
+            loop.quit()
+
+    check.timeout.connect(poll)
+    check.start(1)
+    deadline.setSingleShot(True)
+    deadline.timeout.connect(loop.quit)
+    deadline.start(round(seconds * 1000))
+    loop.exec()
+    check.stop()
+    deadline.stop()
+    if not predicate():
+        raise RuntimeError(f"The requested view did not finish: {window.statusBar().currentMessage()}")
+
+
+def wait_for_paint(probe, window):
+    # Run Qt's normal dispatcher. Repeated processEvents()+sleep() would insert
+    # artificial timer/scheduling delays into the operation being measured.
+    loop, deadline = QEventLoop(), QTimer()
+    probe.finished.connect(loop.quit)
+    deadline.setSingleShot(True)
+    deadline.timeout.connect(loop.quit)
+    deadline.start(30_000)
+    loop.exec()
+    deadline.stop()
+    probe.finished.disconnect(loop.quit)
+    if probe.completed is None:
+        raise RuntimeError(f"The requested paint did not finish: {window.statusBar().currentMessage()}")
 
 
 def measure(app, window, probe, operation, repeats):
@@ -91,7 +120,7 @@ def measure(app, window, probe, operation, repeats):
         probe.begin()
         operation()
         probe.target = window.view_revision
-        wait(app, lambda: probe.completed is not None, window)
+        wait_for_paint(probe, window)
         return probe.completed
 
     one()
@@ -144,7 +173,7 @@ def main():
         probe.started = first_view_started
         window.request_render()
         probe.target = window.view_revision
-        wait(app, lambda: probe.completed is not None, window)
+        wait_for_paint(probe, window)
         first_view_ms = probe.completed
         baseline = Processing()
         process = psutil.Process()
@@ -205,6 +234,9 @@ def main():
             "visible_channels": int(window.channel_count.currentText().split()[0]),
             "window_size": [window.width(), window.height()],
             "platform": platform.platform(),
+            "dependency_versions": {
+                name: version(name) for name in ("numpy", "scipy", "threadpoolctl", "PySide6-Essentials")
+            },
             "processor": platform.processor(),
             "qt_platform": app.platformName(),
             "measurement": "application action to completed Qt widget paints; compositor excluded",

@@ -16,7 +16,7 @@ dependencies = [
   "PySide6-Essentials>=6.6",
   "pyqtgraph>=0.13.7",
   "matplotlib>=3.8",
-  "threadpoolctl==3.6.0",
+  "threadpoolctl==3.6.0", # 3.7's Windows snapshot can lose Unicode DLL paths; see docs/V0_3_ACCEPTANCE.md
 ]
 
 [project.scripts]
