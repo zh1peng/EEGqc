@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 
@@ -26,6 +26,7 @@ from eegqc.application.identity import local_rater_id
 from eegqc.core.conditions import Clause, Condition, normalize_condition
 from eegqc.core.state import ASRConfig, DisplayFilter, Processing
 from eegqc.ui.conditions import ConditionsDialog
+from eegqc.ui.ica_dialog import ICAFitDialog
 
 
 class WorkflowActions:
@@ -36,6 +37,7 @@ class WorkflowActions:
         self.interval_selection = None
         self.rater_id = local_rater_id()
         algorithms = self.algorithm_menu
+        self._action(algorithms, "从已采用状态拟合新 ICA…", self.run_ica)
         self._action(algorithms, "ICLabel 分类与选择…", self.run_iclabel)
         self._action(algorithms, "ASR 连续数据预览…", self.run_asr)
         self._action(algorithms, "EpochLabel 试验模型建议…", self.run_epochlabel)
@@ -43,6 +45,17 @@ class WorkflowActions:
         self._action(self.file_menu, "导出 EpochLabel 贡献包…", self.contribute)
         self._action(self.file_menu, "上传已检查的贡献包…", self.upload_contribution)
         self._action(self.file_menu, "撤回已上传贡献…", self.withdraw_contribution)
+
+    def _submit_long_task(self, *args, **kwargs):
+        if self.long_tasks.busy:
+            self.statusBar().showMessage("已有长任务正在执行或取消，请等待完成后再启动。")
+            return False
+        try:
+            self.long_tasks.submit(*args, **kwargs)
+        except (ValueError, OSError) as error:
+            self.report_error(str(error))
+            return False
+        return True
 
     def condition_queries(self):
         s, ds = self.session, self.session.dataset
@@ -100,24 +113,33 @@ class WorkflowActions:
             self.request_render()
 
     def run_iclabel(self):
-        if self.session is None or self.session.dataset.ica is None:
-            self.statusBar().showMessage("ICLabel 需要已有 ICA 分解")
+        if self.session is None or self.session.ica_for() is None:
+            self.statusBar().showMessage("当前阶段没有 ICA；可以继续基础 QC，或先拟合新 ICA。")
             return
         s = self.session
-        if s.iclabel and s.iclabel["decomposition_id"] == s.dataset.ica.decomposition_id:
+        processing = s.candidate
+        ds = replace(s.dataset, ica=s.ica_for(processing))
+        if not self._has_locations(ds):
+            self.statusBar().showMessage("ICLabel 需要电极位置；波形与人工标记仍可使用。")
+            return
+        if s.iclabel and s.iclabel["decomposition_id"] == ds.ica.decomposition_id:
             self.show_iclabel(s.iclabel)
             return
-        self.statusBar().showMessage("ICLabel 正在后台分类输入分解…")
+        self.statusBar().showMessage(f"ICLabel 正在后台分类分解 {ds.ica.decomposition_id[:8]}…")
 
         def done(report):
-            if self.session is not s:
+            if (
+                self.session is not s
+                or s.ica_for() is None
+                or s.ica_for().decomposition_id != ds.ica.decomposition_id
+            ):
                 return
             s.iclabel = report
             s.revision += 1
             self.autosave_timer.start(700)
             self.show_iclabel(report)
 
-        self.jobs.submit("iclabel", lambda: classify_ics(s.dataset), done)
+        self.property_jobs.submit("iclabel", lambda: classify_ics(s.component_dataset(processing)), done)
 
     def show_iclabel(self, report):
         report["shown"] = True
@@ -125,7 +147,7 @@ class WorkflowActions:
             k: report[k] for k in ("algorithm", "backend", "decomposition_id")
         }
         dialog = QDialog(self)
-        dialog.setWindowTitle("ICLabel · 输入分解的概率建议")
+        dialog.setWindowTitle(f"ICLabel · 分解 {report['decomposition_id'][:8]} 的概率建议")
         dialog.resize(1100, 600)
         layout = QVBoxLayout(dialog)
         layout.addWidget(QLabel("概率仅作为辅助；勾选后进入候选预览，采用后才改变工作状态。"))
@@ -175,7 +197,6 @@ class WorkflowActions:
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("选择并预览")
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(self.session.candidate.asr is None)
         layout.addWidget(buttons)
         if dialog.exec():
             selected = tuple(
@@ -183,6 +204,81 @@ class WorkflowActions:
             )
             self._propose(replace(self.session.candidate, excluded_ics=selected))
             self._populate_ics()
+
+    def run_ica(self):
+        if self.session is None:
+            return
+        from copy import copy
+        from eegqc.application.long_tasks import fit_ica_task, prepare_ica_task
+
+        s = self.session
+        snapshot = copy(s)
+        snapshot.review = s.review
+        snapshot.candidate = s.review.processing
+        dialog = ICAFitDialog(snapshot, self._describe(snapshot.review.processing), self)
+        self.ica_dialog = dialog
+
+        def prepare():
+            parameters = dialog.parameters()
+            dialog.prepare_button.setEnabled(False)
+            dialog.summary.setText("正在检查固定输入与有效秩…")
+
+            def done(prepared):
+                if not dialog.isVisible():
+                    return
+                dialog.prepare_button.setEnabled(True)
+                if parameters == dialog.parameters():
+                    dialog.show_prepared(prepared)
+
+            submitted = self._submit_long_task(
+                "ica-input",
+                prepare_ica_task,
+                args=(snapshot,),
+                kwargs=parameters,
+                data_id=s.dataset.data_id,
+                input_state=snapshot.review.processing,
+                parameters=parameters,
+                callback=done,
+                valid=lambda: self.session is s,
+            )
+            if not submitted:
+                dialog.prepare_button.setEnabled(True)
+
+        def fit(prepared):
+            if self.session is not s:
+                dialog.summary.setText("数据集已切换，请关闭后从当前数据集重新开始。")
+                return
+
+            original_candidate = s.candidate
+
+            def apply(ica):
+                s.propose_ica(ica)
+                self._populate_ics()
+                self._sync_state()
+                self.request_render()
+                self.statusBar().showMessage("新 ICA 已生成候选；检查 IC 后采用并继续 QC。")
+
+            def done(ica):
+                self._receive_task_candidate(
+                    s, prepared.input_processing, original_candidate, lambda: apply(ica)
+                )
+
+            submitted = self._submit_long_task(
+                "ica",
+                fit_ica_task,
+                args=(prepared,),
+                data_id=s.dataset.data_id,
+                input_state=prepared.input_processing,
+                parameters=prepared.params,
+                callback=done,
+                valid=lambda: self.session is s,
+            )
+            if submitted:
+                dialog.close()
+
+        dialog.prepare_requested.connect(prepare)
+        dialog.fit_requested.connect(fit)
+        dialog.show()
 
     def run_asr(self):
         if self.session is None or not self.session.dataset.continuous:
@@ -217,22 +313,33 @@ class WorkflowActions:
         if not dialog.exec():
             return
         parent = s.review.processing.asr.parent if s.review.processing.asr else s.review.processing
+        original_processing, original_candidate = s.review.processing, s.candidate
         config = ASRConfig(parent, cutoff.value(), start.value(), stop.value(), highpass.value() or None)
         candidate = Processing(dropped=parent.dropped, asr=config)
-        revision = s.revision
         self.statusBar().showMessage("正在准备 ASR 候选，完成后可与参考比较…")
-
-        def prepare():
-            s.engine.source(candidate)
-            return candidate
+        from eegqc.application.long_tasks import asr_task
 
         def done(value):
-            if self.session is s and s.revision == revision:
-                self._propose(value)
+            processing, signal = value
+            s.engine.install_asr(processing.asr, signal)
+
+            def apply():
+                self._propose(processing)
                 self._populate_channel_table()
                 self._populate_ics()
 
-        self.jobs.submit("asr", prepare, done)
+            self._receive_task_candidate(s, original_processing, original_candidate, apply)
+
+        self._submit_long_task(
+            "asr",
+            asr_task,
+            args=(s, candidate),
+            data_id=ds.data_id,
+            input_state=parent,
+            parameters=asdict(config),
+            callback=done,
+            valid=lambda: self.session is s,
+        )
 
     def contribute(self):
         if self.session is None:
@@ -285,7 +392,7 @@ class WorkflowActions:
         if not path:
             return
         from copy import copy
-        from eegqc.epochlabel.bundle import export_bundle
+        from eegqc.application.long_tasks import export_bundle_task
 
         s.contribution_groups = {k: v.text().strip() for k, v in fields.items()}
         s.revision += 1
@@ -297,18 +404,22 @@ class WorkflowActions:
             for i in range(condition_fields.count())
             if condition_fields.item(i).checkState() == Qt.CheckState.Checked
         )
-        self.jobs.submit(
+        self._submit_long_task(
             "contribution",
-            lambda: export_bundle(
-                snapshot,
-                path,
+            export_bundle_task,
+            args=(snapshot, path),
+            kwargs=dict(
                 rater_id=self.rater_id,
                 groups=snapshot.contribution_groups,
                 consent=True,
                 include_waveforms=include,
                 condition_fields=shared_fields,
             ),
-            lambda result: self.statusBar().showMessage(f"贡献包已导出：{result}"),
+            data_id=s.dataset.data_id,
+            input_state=s.review.processing,
+            output_path=path,
+            callback=lambda result: self.statusBar().showMessage(f"贡献包已导出：{result}"),
+            valid=lambda: self.session is s,
         )
 
     def upload_contribution(self):

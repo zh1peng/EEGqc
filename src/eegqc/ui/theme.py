@@ -25,6 +25,7 @@ QTableWidget, QListWidget { background: #2b333d; border: 0; alternate-background
 QTableWidget::item:selected, QListWidget::item:selected { background: #24505e; }
 QHeaderView::section { background: #35404c; border: 0; padding: 7px; }
 QScrollArea, QStackedWidget { border: 0; }
+QWidget#inspectorBody, QScrollArea { background: #262c34; }
 QSplitter::handle { background: #3b4652; width: 2px; }
 QStatusBar { background: #232a32; color: #b7c3cd; }
 QCheckBox, QRadioButton { spacing: 7px; padding: 4px; }

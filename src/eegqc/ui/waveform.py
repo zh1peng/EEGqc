@@ -9,7 +9,7 @@ class Waveform(pg.PlotWidget):
 
     def __init__(self):
         super().__init__(background="#fafbfd")
-        self.setMinimumHeight(300)
+        self.setMinimumHeight(220)
         self.getPlotItem().setMenuEnabled(False)
         for name in ("left", "bottom"):
             axis = self.getAxis(name)
@@ -38,6 +38,7 @@ class Waveform(pg.PlotWidget):
         self.addItem(self.selection)
         self.selection.hide()
         self.last_continuous_window = None
+        self.visible_window = None
         self.scene().sigMouseClicked.connect(self._clicked)
 
     def _clicked(self, event):
@@ -151,5 +152,8 @@ class Waveform(pg.PlotWidget):
                         ticks.append((i * self.span + offset, f"{(ds.tmin + offset) * 1000:.0f}"))
         self.getAxis("bottom").setTicks([ticks])
         self.setLabel("bottom", "时间 (s)" if ds.continuous else "相对事件时间 (ms)", color="#536170")
-        self.setXRange(0, count * self.span, padding=0.006)
+        window = (ds.data_id, first, continuous_start, count, samples)
+        if window != self.visible_window:
+            self.setXRange(0, count * self.span, padding=0.006)
+            self.visible_window = window
         self.setYRange(-0.6 * height, top + 0.3 * height, padding=0)

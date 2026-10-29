@@ -5,6 +5,7 @@ from time import monotonic, sleep
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from eegqc.core.conditions import Clause, Condition
@@ -18,7 +19,13 @@ def wait_for_view(app, window):
     deadline = monotonic() + 10
     while monotonic() < deadline:
         app.processEvents()
-        if not window.render_timer.isActive() and window.jobs.active is None and not window.jobs.pending:
+        if (
+            not window.render_timer.isActive()
+            and window.jobs.active is None
+            and not window.jobs.pending
+            and window.property_jobs.active is None
+            and not window.property_jobs.pending
+        ):
             return
         sleep(0.005)
     raise AssertionError("The requested scientific view did not finish")
@@ -89,4 +96,92 @@ def test_continuous_marks_follow_the_displayed_sample_window_and_toggle():
     assert (decision.start, decision.stop) == (1250, 1500)
     window.toggle_current()
     assert not window.session.review.intervals
+    window.close()
+
+
+def test_new_decomposition_stays_candidate_and_old_decision_needs_review(monkeypatch):
+    from uuid import uuid4
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    ds = make_demo(18, 12, 100.0, 1.0)
+    window.set_dataset(ds)
+    window.show()
+    wait_for_view(app, window)
+    window.waveform.setXRange(0.4, 1.2, padding=0)
+    view_range = window.waveform.getViewBox().viewRange()[0]
+    window.set_workspace(1)
+    wait_for_view(app, window)
+    window.set_workspace(0)
+    wait_for_view(app, window)
+    np.testing.assert_allclose(window.waveform.getViewBox().viewRange()[0], view_range)
+    window.mark_selected(True)
+    window.freeze_reference()
+    parent = Processing(average_reference=True)
+    window.session.propose(parent)
+    window.session.adopt()
+    new = replace(ds.ica, decomposition_id=str(uuid4()), input_processing=parent, fit={"data_id": ds.data_id})
+    window.session.propose_ica(new)
+    window._populate_ics()
+    window._changed()
+    wait_for_view(app, window)
+    assert window.session.review.processing == parent
+    assert window.session.candidate.decomposition_id == new.decomposition_id
+    assert new.decomposition_id[:8] in window.ic_context.text()
+    np.testing.assert_allclose(window.session.component_dataset().data, window.session.engine.signal(parent))
+    seen = []
+
+    def classify(dataset):
+        seen.append(dataset.ica.decomposition_id)
+        return {"algorithm": "test", "backend": "test", "decomposition_id": dataset.ica.decomposition_id}
+
+    monkeypatch.setattr("eegqc.ui.workflows.classify_ics", classify)
+    monkeypatch.setattr(window, "show_iclabel", lambda report: None)
+    window.run_iclabel()
+    wait_for_view(app, window)
+    assert seen == [new.decomposition_id]
+    window.adopt()
+    wait_for_view(app, window)
+    assert not window.session.review.rejected
+    assert "旧判断" in window.current_status.text()
+    assert "待复核" in window.navigator.item(0).toolTip()
+    window.mark_selected(False)
+    assert dict(window.session.review.decisions)[0].processing.decomposition_id == new.decomposition_id
+    window.restore_reference()
+    assert window.session.review.rejected == {0}
+    assert window.session.ica_for() is ds.ica
+    window._history(False)
+    assert window.session.ica_for() is new
+    wait_for_view(app, window)
+    window.close()
+
+
+def test_completed_task_does_not_replace_later_processing_and_basic_qc_needs_no_ica():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    ds = replace(make_demo(18, 12, 100.0, 1.0), ica=None, chanlocs=[{} for _ in range(18)])
+    window.set_dataset(ds)
+    window.show()
+    wait_for_view(app, window)
+    assert window.session.ica_for() is None
+    assert not (window.channel_table.item(0, 1).flags() & Qt.ItemFlag.ItemIsUserCheckable)
+    s = window.session
+    original = s.review.processing
+    candidate = Processing(dropped=(1,))
+    window._propose(candidate)
+    window._receive_task_candidate(
+        s, original, original, lambda: window._propose(Processing(average_reference=True))
+    )
+    assert s.candidate == candidate
+    assert window.task_result.isVisible()
+    window._show_task_candidate()
+    assert s.candidate.average_reference
+    window.reset_preview()
+    wait_for_view(app, window)
+    window.mark_selected(True)
+    assert s.review.rejected == {0}
+    window.set_workspace(1)
+    wait_for_view(app, window)
+    assert "已采用" in window.property_label.text()
+    assert window.channel_location.text() == "缺少电极位置"
     window.close()
