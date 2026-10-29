@@ -25,4 +25,4 @@ ICLabel 的模型资源由发行包提供，不在质控时联网下载。贡献
 .\EEGqc.exe --verify-release --dataset "D:\公开样例\eeglab_data_epochs_ica.set" --output "D:\验收结果"
 ```
 
-当前发行覆盖的数据、计算容差和运行环境见仓库的 docs/IMPLEMENTATION_STATUS.md 与后续版本验收记录。实际使用中遇到错误时，报告具体操作、输入布局和错误信息；研究数据可按项目规则另行提供。
+当前发行覆盖的数据、计算容差和运行环境见仓库的 [0.3 验收记录](V0_3_ACCEPTANCE.md)。实际使用中遇到错误时，报告具体操作、输入布局和错误信息；研究数据可按项目规则另行提供。

@@ -4,7 +4,7 @@
 
 目标：让研究者独立完成一份真实 EEG 数据的人工 QC，并得到与界面所见一致、可保存恢复的结果。
 
-本计划替代旧方案中“完整对齐 ManualQC”的验收要求。ManualQC 只提供功能和交互参考；是否开发某项能力，由实际 QC 流程中的需要决定。既有技术背景保留在 [总体设计](../DEVELOPMENT_PLAN.md)，当前完成情况见 [实现与验证记录](IMPLEMENTATION_STATUS.md)。
+本计划替代旧方案中“完整对齐 ManualQC”的验收要求。ManualQC 只提供功能和交互参考；是否开发某项能力，由实际 QC 流程中的需要决定。既有技术背景保留在 [总体设计](../DEVELOPMENT_PLAN.md)，本轮结果见 [0.3 验收记录](V0_3_ACCEPTANCE.md)，0.2 基线见 [历史实现与验证记录](IMPLEMENTATION_STATUS.md)。
 
 ## 一 交付范围与优先级
 

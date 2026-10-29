@@ -96,4 +96,6 @@ uv run python -m eegqc.release_check --dataset output/reference/eeglab_data_epoc
 
 构建命令为 tools/build_portable.ps1，生成 output/portable/EEGqc-0.3.1-windows-x64.zip。解压后运行 EEGqc.exe，无需安装 Python，使用说明见 [PORTABLE.md](docs/PORTABLE.md)。
 
+0.3.1 的[已验收构建](https://github.com/zh1peng/EEGqc/actions/runs/40927093685)提供 eegqc-windows-x64 下载产物（保留 7 天）。科学/状态检查 44 项通过，独立 Windows 环境已完成实际 QC、ICLabel、取消、全新进程恢复与导出验证；数据范围及交互计时见[验收记录](docs/V0_3_ACCEPTANCE.md)。
+
 Windows portable acceptance 工作流先构建发行包，再在另一台没有项目开发环境的 Windows runner 中只下载便携包和公开样例，清空 Python 环境及 PATH 中的开发工具后执行真实 QC、取消、保存、全新进程恢复及导出回读。它由 workflow_dispatch 或显式推送 release-validation/** 分支触发；普通 PR 只运行 Ruff 与科学/状态测试。
