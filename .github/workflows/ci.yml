@@ -1,0 +1,29 @@
+name: Scientific and state checks
+
+on:
+  pull_request:
+  push:
+    branches: [main, 'feature/**']
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.8.3'
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run --no-sync ruff check src tests tools benchmarks
+      - run: uv run --no-sync ruff format --check src tests tools benchmarks
+      - run: uv run --no-sync pytest -q
+        env:
+          QT_QPA_PLATFORM: offscreen
+          MPLBACKEND: Agg

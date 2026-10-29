@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "eegqc"
-version = "0.2.0"
+version = "0.3.1"
 description = "Interactive EEG quality control with EEGPrep and live ERP previews"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -29,7 +29,13 @@ iclabel = ["torch>=2.6"]
 server = ["fastapi>=0.115", "uvicorn>=0.34"]
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.11", "httpx>=0.28", "fastapi>=0.115"]
+dev = [
+    "pytest>=8",
+ "ruff>=0.11",
+ "httpx>=0.28",
+ "fastapi>=0.115",
+ "pyinstaller>=6.22,<7",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/eegqc"]
