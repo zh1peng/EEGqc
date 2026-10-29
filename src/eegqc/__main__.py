@@ -4,6 +4,9 @@ import sys
 
 
 def main():
+    from multiprocessing import freeze_support
+
+    freeze_support()
     parser = argparse.ArgumentParser(description="EEGqc manual EEG quality control")
     parser.add_argument("dataset", nargs="?", help="EEGLAB .set file")
     parser.add_argument("--demo", action="store_true", help="Open explicitly synthetic demonstration data")
