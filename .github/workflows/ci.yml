@@ -2,8 +2,10 @@ name: Scientific and state checks
 
 on:
   pull_request:
+    paths: ['src/**', 'tests/**', 'tools/**', 'benchmarks/**', 'packaging/**', 'pyproject.toml', 'uv.lock', '.github/workflows/ci.yml']
   push:
     branches: [main, 'feature/**']
+    paths: ['src/**', 'tests/**', 'tools/**', 'benchmarks/**', 'packaging/**', 'pyproject.toml', 'uv.lock', '.github/workflows/ci.yml']
 
 permissions:
   contents: read
@@ -21,8 +23,8 @@ jobs:
           version: '0.8.3'
           enable-cache: true
       - run: uv sync --locked
-      - run: uv run --no-sync ruff check src tests tools benchmarks
-      - run: uv run --no-sync ruff format --check src tests tools benchmarks
+      - run: uv run --no-sync ruff check src tests tools benchmarks packaging/launcher.py
+      - run: uv run --no-sync ruff format --check src tests tools benchmarks packaging/launcher.py
       - run: uv run --no-sync pytest -q
         env:
           QT_QPA_PLATFORM: offscreen

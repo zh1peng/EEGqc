@@ -84,6 +84,9 @@ def wait(app, predicate, window, seconds=30):
 
 
 def measure(app, window, probe, operation, repeats):
+    resident = []
+    process = psutil.Process()
+
     def one():
         probe.begin()
         operation()
@@ -92,12 +95,17 @@ def measure(app, window, probe, operation, repeats):
         return probe.completed
 
     one()
-    values = [one() for _ in range(repeats)]
+    values = []
+    for index in range(repeats):
+        values.append(one())
+        if index + 1 in (5, 15, repeats):
+            resident.append({"repeat": index + 1, "resident_mb": round(process.memory_info().rss / 1e6, 2)})
     return {
         "p50_ms": round(float(np.percentile(values, 50)), 3),
         "p95_ms": round(float(np.percentile(values, 95)), 3),
         "max_ms": round(max(values), 3),
         "samples": len(values),
+        "resident_samples": resident,
     }
 
 
@@ -109,32 +117,35 @@ def main():
     parser.add_argument("--sfreq", type=float, default=500.0)
     parser.add_argument("--duration", type=float, default=1.2)
     parser.add_argument("--repeats", type=int, default=30)
+    parser.add_argument("--visible-channels", type=int, choices=(16, 32, 64), default=16)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     app = QApplication(sys.argv[:1])
     configure_app(app)
     with threadpool_limits(limits=2, user_api="blas"):
+        preparation_started = perf_counter()
         ds = (
             load_set(args.dataset)
             if args.dataset
             else make_demo(args.channels, args.epochs, args.sfreq, args.duration)
         )
+        preparation_ms = (perf_counter() - preparation_started) * 1000
+        first_view_started = perf_counter()
         window = MainWindow()
         window.resize(1500, 1000)
         window.set_dataset(ds)
         window.session_path = None  # A benchmark never saves experimental QC decisions.
+        window.channel_count.setCurrentText(f"{args.visible_channels} 通道")
         window.show()
         if not ds.continuous:
             window.erp_dock.show()
-        window.request_render()
-        wait(
-            app,
-            lambda: (
-                window.jobs.active is None and not window.jobs.pending and not window.render_timer.isActive()
-            ),
-            window,
-        )
         probe = PaintProbe(window)
+        probe.begin()
+        probe.started = first_view_started
+        window.request_render()
+        probe.target = window.view_revision
+        wait(app, lambda: probe.completed is not None, window)
+        first_view_ms = probe.completed
         baseline = Processing()
         process = psutil.Process()
         initial_memory = process.memory_info().rss
@@ -197,6 +208,8 @@ def main():
             "processor": platform.processor(),
             "qt_platform": app.platformName(),
             "measurement": "application action to completed Qt widget paints; compositor excluded",
+            "dataset_preparation_ms": round(preparation_ms, 3),
+            "first_view_ms": round(first_view_ms, 3),
             "blas": [
                 {k: b[k] for k in ("internal_api", "num_threads", "version")} for b in threadpool_info()
             ],
