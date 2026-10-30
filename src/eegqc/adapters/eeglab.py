@@ -57,6 +57,8 @@ def from_eeg(eeg: dict, source: Path | None = None) -> Dataset:
     ica = None
     weights = np.asarray(eeg.get("icaweights", []))
     sphere = np.asarray(eeg.get("icasphere", []))
+    if bool(weights.size) != bool(sphere.size):
+        raise ValueError("ICA import requires both icaweights and icasphere")
     if weights.size and sphere.size:
         indices = np.asarray(eeg.get("icachansind", []), dtype=int).ravel()
         if not indices.size:
@@ -87,7 +89,34 @@ def load_set(path: str | Path) -> Dataset:
     from eegprep import pop_loadset
 
     path = Path(path).resolve()
-    return from_eeg(pop_loadset(str(path)), path)
+    try:
+        eeg = pop_loadset(str(path))
+    except np.linalg.LinAlgError:
+        # EEGPrep 0.4's MAT loader squeezes a one-component ICA to vectors
+        # before eeg_checkset's matrix inverse. Repair this specific layout.
+        from scipy.io import loadmat
+        from eegprep.functions.adminfunc.eeg_checkset import eeg_checkset
+        from eegprep.functions.popfunc.pop_loadset import _load_sidecar_data
+        from eegprep.functions.popfunc._file_io import normalize_icachansind, ur_indices_to_zero_based
+
+        eeg = loadmat(path, simplify_cells=True)
+        eeg = eeg.get("EEG", eeg)
+        weights = np.asarray(eeg.get("icaweights", []))
+        sphere = np.asarray(eeg.get("icasphere", []))
+        mixing = np.asarray(eeg.get("icawinv", []))
+        if weights.ndim != 1 or sphere.ndim != 2 or mixing.ndim != 1:
+            raise
+        eeg["icaweights"] = weights[np.newaxis]
+        eeg["icawinv"] = mixing[:, np.newaxis]
+        eeg["filepath"], eeg["filename"] = str(path.parent), path.name
+        eeg["icachansind"] = normalize_icachansind(eeg["icachansind"], matlab_one_based=True)
+        _load_sidecar_data(eeg, path, use_memmap=False)
+        for key in ("chanlocs", "event"):
+            if isinstance(eeg.get(key), dict):
+                eeg[key] = [eeg[key]]
+        ur_indices_to_zero_based(eeg)
+        eeg = eeg_checkset(eeg)
+    return from_eeg(eeg, path)
 
 
 def interpolation_operator(dataset: Dataset, bad: tuple[int, ...]) -> np.ndarray:
@@ -203,20 +232,33 @@ def export_set(session, path: str | Path):
     eeg["specdata"] = np.array([])
     eeg["specicaact"] = np.array([])
     proc = review.processing
-    if proc.interpolated or proc.average_reference or proc.dropped or proc.asr is not None:
+    ica = ds.ica_for(proc)
+    compatible = (
+        ica is not None
+        and not proc.interpolated
+        and not proc.average_reference
+        and proc.asr is None
+        and not set(proc.dropped).intersection(ica.channels)
+    )
+    if ica is not None and len(proc.excluded_ics) == ica.count:
+        compatible = False
+    if not compatible:
         for key in ("icaweights", "icasphere", "icawinv", "icachansind"):
             eeg[key] = np.array([], dtype=int if key == "icachansind" else float)
         eeg.get("etc", {}).pop("ic_classification", None)
         eeg.pop("dipfit", None)
-    elif proc.excluded_ics and ds.ica is not None:
-        keep = np.ones(ds.ica.count, dtype=bool)
+    else:
+        keep = np.ones(ica.count, dtype=bool)
         keep[list(proc.excluded_ics)] = False
-        eeg["icaweights"] = np.asarray(eeg["icaweights"])[keep]
-        eeg["icawinv"] = np.asarray(eeg["icawinv"])[:, keep]
-        eeg.get("etc", {}).pop("ic_classification", None)
-        eeg.pop("dipfit", None)
+        eeg["icaweights"] = ica.unmixing[keep] * 1e-6
+        eeg["icasphere"] = np.eye(len(ica.channels))
+        eeg["icawinv"] = ica.mixing[:, keep] * 1e6
+        eeg["icachansind"] = ica.channels.copy()
+        if proc.excluded_ics or proc.decomposition_id is not None:
+            eeg.get("etc", {}).pop("ic_classification", None)
+            eeg.pop("dipfit", None)
     eeg["reject"] = {}
-    removed = merged_intervals(review.intervals)
+    removed = merged_intervals(review.active_intervals)
     if ds.continuous and removed:
         if sum(stop - start for start, stop in removed) >= ds.data.shape[2]:
             raise ValueError("No samples remain to export")
@@ -236,6 +278,7 @@ def export_set(session, path: str | Path):
         "rating": review.rating,
         "note": review.note,
         "processing_json": json.dumps(asdict(proc)),
+        "decomposition_id": ica.decomposition_id if compatible else "",
     }
     if ds.continuous:
         eeg["etc"]["eegqc"]["removed_sample_intervals"] = np.asarray(removed, dtype=int).reshape(-1, 2)

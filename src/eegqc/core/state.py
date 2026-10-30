@@ -11,6 +11,7 @@ class Processing:
     dropped: tuple[int, ...] = ()
     average_reference: bool = False
     asr: ASRConfig | None = None
+    decomposition_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -67,7 +68,17 @@ class Review:
 
     @property
     def rejected(self) -> frozenset[int]:
-        return frozenset(i for i, d in self.decisions if d.rejected)
+        return frozenset(i for i, d in self.decisions if d.rejected and d.processing == self.processing)
+
+    @property
+    def active_intervals(self):
+        return tuple(d for d in self.intervals if d.processing == self.processing)
+
+    @property
+    def pending_review_count(self):
+        return sum(d.processing != self.processing for _, d in self.decisions) + sum(
+            d.processing != self.processing for d in self.intervals
+        )
 
     def record(self):
         return asdict(self)

@@ -33,15 +33,40 @@ class PreviewEngine:
         self._interpolation: OrderedDict[tuple, np.ndarray] = OrderedDict()
         self._base_signals: OrderedDict[object, np.ndarray] = OrderedDict()
         self._filtered: OrderedDict[tuple, np.ndarray] = OrderedDict()
+        self._stage_files = {}
+
+    def install_asr(self, config, signal):
+        if signal.shape != self.dataset.data.shape or not np.isfinite(signal).all():
+            raise ValueError("ASR result does not match the dataset signal")
+        signal.flags.writeable = False
+        self._base_signals[config] = signal
+        if len(self._base_signals) > 2:
+            self._base_signals.popitem(last=False)
 
     def source(self, processing: Processing, display_filter: DisplayFilter | None = None):
         data = self.dataset.data
-        if processing.asr is not None:
+        if processing.decomposition_id is not None and processing.asr is None:
+            key = processing.decomposition_id
+            if key not in self._base_signals:
+                ica = self.dataset.ica_for(processing)
+                data = self.signal(ica.input_processing)
+                data.flags.writeable = False
+                self._base_signals[key] = data
+                if len(self._base_signals) > 2:
+                    self._base_signals.popitem(last=False)
+            self._base_signals.move_to_end(key)
+            data = self._base_signals[key]
+        elif processing.asr is not None:
             config = processing.asr
             if config not in self._base_signals:
-                from eegqc.adapters.algorithms import asr_signal
+                if config in self._stage_files:
+                    path, key = self._stage_files[config]
+                    with np.load(path, allow_pickle=False) as arrays:
+                        data = arrays[key]
+                else:
+                    from eegqc.adapters.algorithms import asr_signal
 
-                data = asr_signal(self.dataset, self.signal(config.parent), config)
+                    data = asr_signal(self.dataset, self.signal(config.parent), config)
                 data.flags.writeable = False
                 self._base_signals[config] = data
                 if len(self._base_signals) > 2:
@@ -49,7 +74,7 @@ class PreviewEngine:
             self._base_signals.move_to_end(config)
             data = self._base_signals[config]
         if display_filter is not None and display_filter != DisplayFilter():
-            key = (processing.asr, display_filter)
+            key = (processing.decomposition_id, processing.asr, display_filter)
             if key not in self._filtered:
                 from eegqc.adapters.algorithms import filter_signal
 
@@ -67,15 +92,16 @@ class PreviewEngine:
         ds = self.dataset
         transform = np.eye(ds.n_channels)
         if processing.excluded_ics:
-            if processing.asr is not None:
-                raise ValueError("The input ICA decomposition cannot be applied after ASR")
-            if ds.ica is None:
+            ica = ds.ica_for(processing)
+            if ica is None:
                 raise ValueError("This dataset has no ICA decomposition")
-            keep = np.ones(ds.ica.count, dtype=bool)
+            if any(i < 0 or i >= ica.count for i in processing.excluded_ics):
+                raise ValueError("Excluded IC index is outside this decomposition")
+            keep = np.ones(ica.count, dtype=bool)
             keep[list(processing.excluded_ics)] = False
             # EEGLAB pop_subcomp rebuilds from retained components, including reduced-rank ICA.
-            projection = ds.ica.mixing[:, keep] @ ds.ica.unmixing[keep]
-            transform[np.ix_(ds.ica.channels, ds.ica.channels)] = projection
+            projection = ica.mixing[:, keep] @ ica.unmixing[keep]
+            transform[np.ix_(ica.channels, ica.channels)] = projection
         if processing.interpolated:
             from eegqc.adapters.eeglab import interpolation_operator
 
@@ -133,7 +159,7 @@ class PreviewEngine:
         if ds.continuous:
             raise ValueError("ERP requires epoched data")
         condition = normalize_condition(condition)
-        key = (processing.asr, display_filter, condition)
+        key = (processing.decomposition_id, processing.asr, display_filter, condition)
         summary = self._summaries.get(key)
         if summary is None:
             members = condition.mask(ds)

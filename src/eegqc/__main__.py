@@ -4,6 +4,9 @@ import sys
 
 
 def main():
+    from multiprocessing import freeze_support
+
+    freeze_support()
     parser = argparse.ArgumentParser(description="EEGqc manual EEG quality control")
     parser.add_argument("dataset", nargs="?", help="EEGLAB .set file")
     parser.add_argument("--demo", action="store_true", help="Open explicitly synthetic demonstration data")
@@ -21,6 +24,8 @@ def main():
     app = QApplication(sys.argv)
     configure_app(app)
     window = MainWindow()
+    work_area = app.primaryScreen().availableGeometry().adjusted(10, 10, -10, -40)
+    window.resize(window.size().boundedTo(work_area.size()))
     window.show()
     if args.dataset:
         QTimer.singleShot(0, lambda: window.open_path(args.dataset))

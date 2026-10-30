@@ -60,6 +60,11 @@ def export_bundle(
                 "origin": decision.origin,
                 "suggestions_seen": list(decision.suggestions_seen),
                 "processing": asdict(decision.processing),
+                "decomposition_id": (
+                    ds.ica_for(decision.processing).decomposition_id
+                    if ds.ica_for(decision.processing) is not None
+                    else None
+                ),
                 "display_context": {
                     k: v for k, v in decision.display_context.items() if k != "erp_conditions"
                 },

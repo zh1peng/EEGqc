@@ -1,0 +1,81 @@
+name: Windows portable acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['release-validation/**']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.8.3'
+          enable-cache: true
+      - run: uv sync --locked --extra iclabel
+      - run: ./tools/build_portable.ps1 -SkipSync
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eegqc-windows-x64
+          path: output/portable/*.zip
+          compression-level: 0
+          retention-days: 7
+
+  independent-acceptance:
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      # This new VM receives only the application and public EEG data. It does
+      # not check out the project, install Python or install project packages.
+      - uses: actions/download-artifact@v4
+        with:
+          name: eegqc-windows-x64
+          path: incoming
+      - name: Run the frozen scientific workflow without the development environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $eegqcFolder = Join-Path $env:RUNNER_TEMP 'EEGqc 便携验收'
+          New-Item -ItemType Directory -Path $eegqcFolder | Out-Null
+          $eegqcZip = Get-ChildItem incoming/*.zip | Select-Object -First 1
+          Expand-Archive -LiteralPath $eegqcZip.FullName -DestinationPath $eegqcFolder
+          $eegqcSamples = Join-Path $eegqcFolder '公开样例 with spaces'
+          New-Item -ItemType Directory -Path $eegqcSamples | Out-Null
+          $eegqcBase = 'https://raw.githubusercontent.com/sccn/eegprep/f22111a576f1beacbb1ed44069ef16c871f77765/sample_data/'
+          foreach ($eegqcName in @('eeglab_data_epochs_ica.set', 'eeglab_data_epochs_ica.fdt', 'eeglab_data.set', 'eeglab_data.fdt')) {
+            Invoke-WebRequest -Uri ($eegqcBase + $eegqcName) -OutFile (Join-Path $eegqcSamples $eegqcName)
+          }
+          $eegqcExe = Join-Path $eegqcFolder 'EEGqc/EEGqc.exe'
+          $eegqcDataset = Join-Path $eegqcSamples 'eeglab_data_epochs_ica.set'
+          $eegqcContinuous = Join-Path $eegqcSamples 'eeglab_data.set'
+          $eegqcReport = Join-Path $env:GITHUB_WORKSPACE 'acceptance'
+          $env:PYTHONHOME = ''
+          $env:PYTHONPATH = ''
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $eegqcArguments = @('--verify-release', '--dataset', "`"$eegqcDataset`"", '--continuous', "`"$eegqcContinuous`"", '--output', "`"$eegqcReport`"")
+          $eegqcProcess = Start-Process -FilePath $eegqcExe -ArgumentList $eegqcArguments -PassThru -WindowStyle Hidden
+          if (-not $eegqcProcess.WaitForExit(600000)) {
+            Stop-Process -Id $eegqcProcess.Id
+            throw 'Frozen workflow did not finish in ten minutes'
+          }
+          if ($eegqcProcess.ExitCode -ne 0) { throw "Frozen workflow failed: $($eegqcProcess.ExitCode)" }
+          $eegqcResult = Get-Content -Raw (Join-Path $eegqcReport 'acceptance.json') | ConvertFrom-Json
+          if ($eegqcResult.status -ne 'passed' -or -not $eegqcResult.frozen) { throw 'Frozen acceptance did not pass' }
+          $eegqcResult | ConvertTo-Json -Depth 8
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: portable-acceptance
+          path: acceptance/
+          retention-days: 7

@@ -90,9 +90,18 @@ def classify_ics(dataset):
     if dataset.ica is None:
         raise ValueError("ICLabel requires an existing ICA decomposition")
     eeg = native_eeg(dataset)
-    eeg["icaact"] = np.einsum(
-        "ic,ect->ite", dataset.ica.unmixing, dataset.data[:, dataset.ica.channels], optimize=True
-    )
+    channels = dataset.ica.channels
+    # ICLabel's feature extractor re-references this object. EEGPrep requires
+    # its data/channel layout and ICA layout to agree for that conversion.
+    eeg["data"] = eeg["data"][channels]
+    eeg["chanlocs"] = [eeg["chanlocs"][i] for i in channels]
+    eeg["nbchan"] = len(channels)
+    eeg["icachansind"] = np.arange(len(channels))
+    if len(channels) != dataset.n_channels and eeg.get("ref") in ("average", "averef"):
+        # An average across the full recording is not the subset's average.
+        # Let the backend apply its actual reference conversion to this copy.
+        eeg["ref"] = "unknown"
+    eeg["icaact"] = np.einsum("ic,ect->ite", dataset.ica.unmixing, dataset.data[:, channels], optimize=True)
     torch.set_num_threads(2)
     with torch.inference_mode():
         result = iclabel(eeg)
