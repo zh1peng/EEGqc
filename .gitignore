@@ -5,6 +5,7 @@ __pycache__/
 *.egg-info/
 .reference/
 output/
+sample_data/
 *.eegqc.json
 *.eegqc.json.bak
 *.eegqc.*.npz

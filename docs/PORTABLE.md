@@ -1,5 +1,7 @@
 # EEGqc Windows 便携版
 
+固定下载入口：[0.3.1 Release](https://github.com/zh1peng/EEGqc/releases/tag/v0.3.1)，选择 EEGqc-0.3.1-windows-x64.zip。
+
 完整解压 zip，双击 EEGqc 文件夹内的 EEGqc.exe。保留同目录的 _internal 文件夹，运行无需安装 Python。文件菜单可打开 .set，或加载明确标记的合成演示数据。
 
 窗口会按屏幕的逻辑工作区设置初始尺寸。较高系统缩放或较小窗口下，中央 QC 区和右侧检查区可以分别纵向滚动，导航、保存和恢复参考仍可到达；ERP 面板可调整大小、浮动或关闭。程序保留用户保存的面板布局。

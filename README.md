@@ -1,6 +1,6 @@
 # EEGqc
 
-以 EEGPrep 为主要科学后端的 EEG 人工质控桌面应用。当前开发版本为 **0.3.1**，支持候选处理预览、采用后继续 QC、条件 ERP、当前状态的 ICA 重拟合及本地 EpochLabel 采集流程。参见[下一阶段详细计划](docs/DEVELOPMENT_V0_3.md)、[0.3 验收记录](docs/V0_3_ACCEPTANCE.md)、[总体设计](DEVELOPMENT_PLAN.md)与[0.2 实现记录](docs/IMPLEMENTATION_STATUS.md)。
+以 EEGPrep 为主要科学后端的 EEG 人工质控桌面应用。当前开发版本为 **0.3.1**，支持候选处理预览、采用后继续 QC、条件 ERP、当前状态的 ICA 重拟合及本地 EpochLabel 采集流程。参见[后续试用与研究计划](docs/NEXT_STEPS.md)、[本机真实数据验证](docs/LOCAL_VALIDATION.md)、[0.3 验收记录](docs/V0_3_ACCEPTANCE.md)、[总体设计](DEVELOPMENT_PLAN.md)与[0.2 实现记录](docs/IMPLEMENTATION_STATUS.md)。
 
 ## 运行
 
@@ -22,6 +22,10 @@ uv run --extra iclabel eegqc path/to/recording.set
 ## 质控流程
 
 四个工作区分别用于 Epoch、通道、IC 检查与结果复核，ERP 面板可停靠，布局可保存、载入和恢复。
+
+源码界面采用浅色三栏布局：左侧为工作区与实际数据批次，中间为信号、epoch 总览和数据集评级，右侧为当前人工判断与 EpochRank 推荐。参考、平均参考、候选采用和 ERP 入口集中在“处理与对比”页；产生候选时自动切换到该页。顶部保存按钮写入质控记录，清理后的数据仍由文件菜单导出。
+
+打开数据后先进入通道检查，推荐顺序为“通道 → IC → Epoch → 结果复核”。“下一步”在候选处理采用或取消后继续，没有 ICA 时跳过 IC 步骤；左侧仍可自由切换，已完成前处理的数据可直接进入 Epoch。Epoch 总览使用无编号的状态滑轨：点击或拖动浏览，滚轮/方向键逐段微调，Shift 选择连续范围，Ctrl 点击增减选择；青色游标显示当前位置，外框表示当前波形窗口。颜色区分未检查、保留、拒绝和旧状态待复核。滑动只改变查看位置，不生成质量标签。
 
 - 排除已有 IC、球面坏道插值、导出删除通道、平均参考先形成候选预览。点击“采用预览并继续 QC”后，人工判断绑定该处理状态。
 - 可将输入或任意已采用状态固定为参考，叠加比较波形；条件 ERP 可分别比较处理效果、epoch 剔除或整体 QC。
@@ -45,6 +49,12 @@ uv run --extra iclabel eegqc path/to/recording.set
 “算法 → 从已采用状态拟合新 ICA”使用 EEGPrep Extended Infomax。选择通道及未拒绝/全部样本，先检查有效秩，再决定成分数和迭代参数。显示滤波不进入拟合；新分解先显示为候选。采用后 IC 图、属性和 ICLabel 使用新分解；原参考及旧判断仍保留各自归属。保存恢复直接读取分解矩阵，不重新拟合。部分通道 ICA 的 ICLabel 在相应通道副本上完成特征与参考转换，不改变工作信号。
 
 EEGPrep 0.4.0 的 ASR 在公开 32 通道样例上出现了屏蔽子空间的伪逆数值问题。EEGqc 保留其校准与处理逻辑，仅对重建伪逆使用 SciPy 的维度缩放容差，并在记录中保存实现版本。来源、许可及独立数值对照见 [ASR_NUMERICS.md](docs/ASR_NUMERICS.md)。
+
+## EpochRank 动态检查顺序（源码试验）
+
+“算法 → EpochRank · 推荐检查”打开推荐面板。人工标坏一个 epoch 后，按与所有已标坏样本中最近者的特征距离排列未检查 epochs；有人工好、坏样本后，可切换到累计反馈的逻辑回归排序。点击推荐项查看波形，使用原有标记按钮确认，顺序随反馈、纠正和撤销更新。
+
+EpochRank 针对当前记录与已采用处理状态，使用信号统计、频谱和逐通道幅度特征。它与面向大样本预训练的 EpochLabel 分开；不确定、行为剔除和旧处理状态的判断不参与训练，未检查样本也不视为好样本。当前仅完成软件与耗时验证，尚无独立人工标签评价。算法、使用步骤及下一步比较见 [EpochRank 说明](docs/EPOCHRANK.md)。已发布的 0.3.1 便携包不包含这个源码试验功能。
 
 ## EpochLabel 采集与研究基线
 
@@ -96,6 +106,6 @@ uv run python -m eegqc.release_check --dataset output/reference/eeglab_data_epoc
 
 构建命令为 tools/build_portable.ps1，生成 output/portable/EEGqc-0.3.1-windows-x64.zip。解压后运行 EEGqc.exe，无需安装 Python，使用说明见 [PORTABLE.md](docs/PORTABLE.md)。
 
-0.3.1 的[已验收构建](https://github.com/zh1peng/EEGqc/actions/runs/40927093685)提供 eegqc-windows-x64 下载产物（保留 7 天）。科学/状态检查 44 项通过，独立 Windows 环境已完成实际 QC、ICLabel、取消、全新进程恢复与导出验证；数据范围及交互计时见[验收记录](docs/V0_3_ACCEPTANCE.md)。
+从 [0.3.1 Release](https://github.com/zh1peng/EEGqc/releases/tag/v0.3.1) 下载 EEGqc-0.3.1-windows-x64.zip。该包来自[已通过独立验收的构建](https://github.com/zh1peng/EEGqc/actions/runs/40927093685)，Release 下载不受 Actions 产物 7 天保留期限制。科学/状态检查 44 项通过，独立 Windows 环境已完成实际 QC、ICLabel、取消、全新进程恢复与导出验证；数据范围及交互计时见[验收记录](docs/V0_3_ACCEPTANCE.md)与[本机真实数据补充验证](docs/LOCAL_VALIDATION.md)。
 
 Windows portable acceptance 工作流先构建发行包，再在另一台没有项目开发环境的 Windows runner 中只下载便携包和公开样例，清空 Python 环境及 PATH 中的开发工具后执行真实 QC、取消、保存、全新进程恢复及导出回读。它由 workflow_dispatch 或显式推送 release-validation/** 分支触发；普通 PR 只运行 Ruff 与科学/状态测试。

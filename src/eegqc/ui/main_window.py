@@ -5,7 +5,7 @@ import time
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QSize, Qt, QTimer, QSettings
+from PySide6.QtCore import Qt, QTimer, QSettings
 from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QStackedWidget,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
@@ -50,6 +51,8 @@ from eegqc.adapters.eeglab import (
 from eegqc.application.persistence import export_labels, restore_session, save_session
 from eegqc.application.session import Session
 from eegqc.demo import make_demo
+from eegqc.ui.epochrank import EpochRankDock
+from eegqc.ui.epoch_rail import EpochRail
 from eegqc.ui.jobs import Jobs
 from eegqc.ui.long_tasks import LongTasks
 from eegqc.ui.theme import STYLE
@@ -75,6 +78,7 @@ def plot(title):
 class MainWindow(QMainWindow, WorkflowActions):
     def __init__(self):
         super().__init__()
+        pg.setConfigOptions(background="#fafbfd", foreground="#536170")
         self.setWindowTitle("EEGqc · 人工质量控制")
         self.resize(1500, 1000)
         self.setStyleSheet(STYLE)
@@ -109,6 +113,9 @@ class MainWindow(QMainWindow, WorkflowActions):
         self._menus()
         self._layout()
         self.configure_workflows()
+        self.epochrank = EpochRankDock(self)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.epochrank)
+        self.algorithm_menu.addAction(self.epochrank.toggleViewAction())
         self.task_label = QLabel()
         self.task_cancel = button("取消长任务", self.long_tasks.cancel)
         self.task_result = button("查看已完成候选", self._show_task_candidate)
@@ -176,25 +183,33 @@ class MainWindow(QMainWindow, WorkflowActions):
         brand = QLabel("EEGqc   ")
         brand.setObjectName("brand")
         nav.addWidget(brand)
-        self.workspace_buttons = QButtonGroup(self)
-        for i, name in enumerate(("Epoch 检查", "通道检查", "IC 检查", "结果复核")):
-            item = button(name, lambda checked=False, n=i: self.set_workspace(n))
-            item.setCheckable(True)
-            self.workspace_buttons.addButton(item, i)
-            nav.addWidget(item)
-        self.workspace_buttons.button(0).setChecked(True)
-        nav.addSeparator()
-        nav.addWidget(button("打开数据集", self.open_dialog))
-        nav.addWidget(button("‹ 数据集", lambda: self.next_dataset(-1)))
-        nav.addWidget(button("数据集 ›", lambda: self.next_dataset(1)))
+        subtitle = QLabel("信号检查与人工质量控制")
+        subtitle.setObjectName("muted")
+        nav.addWidget(subtitle)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        nav.addWidget(spacer)
+        nav.addWidget(button("保存质控记录", self.save, True))
+        self._navigation()
         root = QWidget()
         layout = QVBoxLayout(root)
-        layout.setContentsMargins(8, 0, 8, 8)
+        layout.setContentsMargins(18, 10, 18, 12)
         layout.setSpacing(7)
         self.context = QLabel("尚未载入数据")
         self.context.setObjectName("context")
+        self.context.setWordWrap(True)
         layout.addWidget(self.context)
+        workflow = QHBoxLayout()
+        self.workflow_hint = QLabel("先检查通道与 IC，再进行 Epoch 判断")
+        self.workflow_hint.setObjectName("muted")
+        self.workflow_hint.setWordWrap(True)
+        workflow.addWidget(self.workflow_hint, 1)
+        self.next_step = button("下一步：IC 检查 →", self._next_workspace)
+        workflow.addWidget(self.next_step)
+        layout.addLayout(workflow)
         self.stack = QStackedWidget()
+        self.stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.stack.setMinimumHeight(300)
         self._epoch_page()
         self._channel_page()
         self._ic_page()
@@ -214,20 +229,86 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.dataset_note.setPlaceholderText("数据集备注…")
         self.dataset_note.editingFinished.connect(self._rating_changed)
         footer.addWidget(self.dataset_note, 1)
-        footer.addWidget(button("保存记录", self.save))
         footer.addWidget(button("保存并下一份 →", self.save_next, True))
         layout.addLayout(footer)
         root.setObjectName("qcBody")
-        root.setStyleSheet("QWidget#qcBody { background: #262c34; }")
-        central = QScrollArea()
-        central.setFrameShape(QScrollArea.Shape.NoFrame)
-        central.setWidgetResizable(True)
-        central.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        central.setMinimumHeight(self.waveform.minimumHeight())
-        central.setWidget(root)
-        self.setCentralWidget(central)
+        root.setStyleSheet("QWidget#qcBody { background: #ffffff; }")
+        self.setCentralWidget(root)
         self._inspector()
         self._erp_dock()
+
+    def _navigation(self):
+        dock = QDockWidget(self)
+        dock.setObjectName("navigation")
+        dock.setTitleBarWidget(QWidget())
+        dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+        body = QWidget()
+        body.setObjectName("navigationBody")
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(12, 20, 12, 16)
+        layout.setSpacing(10)
+        layout.addWidget(button("打开数据…", self.open_dialog))
+        layout.addWidget(button("搜索数据目录…", self.search_directory))
+        label = QLabel("检查工作区")
+        label.setObjectName("sectionLabel")
+        layout.addWidget(label)
+        self.workspace_buttons = QButtonGroup(self)
+        for i, name in (
+            (1, "01   通道检查"),
+            (2, "02   IC 检查"),
+            (0, "03   Epoch 检查"),
+            (3, "04   结果复核"),
+        ):
+            item = button(name, lambda checked=False, n=i: self.set_workspace(n))
+            item.setObjectName("workspaceNav")
+            item.setCheckable(True)
+            self.workspace_buttons.addButton(item, i)
+            layout.addWidget(item)
+        self.workspace_buttons.button(0).setChecked(True)
+        layout.addWidget(
+            button("EpochRank 推荐", lambda: self.epochrank.setVisible(not self.epochrank.isVisible()))
+        )
+        label = QLabel("当前数据 / 批次")
+        label.setObjectName("sectionLabel")
+        layout.addWidget(label)
+        self.dataset_list = QListWidget()
+        self.dataset_list.setObjectName("datasetList")
+        self.dataset_list.setWordWrap(True)
+        self.dataset_list.itemClicked.connect(self._choose_dataset)
+        layout.addWidget(self.dataset_list, 1)
+        row = QHBoxLayout()
+        row.addWidget(button("‹ 上一份", lambda: self.next_dataset(-1)))
+        row.addWidget(button("下一份 ›", lambda: self.next_dataset(1)))
+        layout.addLayout(row)
+        note = QLabel("人工判断随处理状态保存\nCtrl+Z 撤销 · Ctrl+S 保存")
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        dock.setWidget(body)
+        dock.setFixedWidth(190)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
+
+    def _choose_dataset(self, item):
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if path and (self.session is None or Path(path) != self.session.dataset.source):
+            self.open_path(path)
+
+    def _sync_dataset_list(self):
+        ds = self.session.dataset
+        self.dataset_list.clear()
+        paths = list(self.queue)
+        if ds.source and ds.source not in paths:
+            paths.append(ds.source)
+        for path in paths:
+            item = QListWidgetItem(path.stem)
+            item.setData(Qt.ItemDataRole.UserRole, str(path))
+            item.setToolTip(str(path))
+            self.dataset_list.addItem(item)
+            if path == ds.source:
+                self.dataset_list.setCurrentItem(item)
+        if ds.source is None:
+            self.dataset_list.addItem("合成演示数据")
+            self.dataset_list.setCurrentRow(self.dataset_list.count() - 1)
 
     def _epoch_page(self):
         page = QWidget()
@@ -236,12 +317,11 @@ class MainWindow(QMainWindow, WorkflowActions):
         toolbar = QHBoxLayout()
         self.batch_mark = button("标记选中 epochs", lambda: self.mark_selected(True))
         self.batch_keep = button("确认保留", lambda: self.mark_selected(False))
-        toolbar.addWidget(self.batch_mark)
-        toolbar.addWidget(self.batch_keep)
         self.amplitude = QComboBox()
         self.amplitude.addItems(["25 μV", "50 μV", "100 μV", "200 μV"])
         self.amplitude.setCurrentIndex(1)
         self.amplitude.currentIndexChanged.connect(self.request_render)
+        toolbar.addWidget(QLabel("幅度"))
         toolbar.addWidget(self.amplitude)
         self.channel_count = QComboBox()
         self.channel_count.addItems(["16 通道", "32 通道", "64 通道"])
@@ -259,17 +339,23 @@ class MainWindow(QMainWindow, WorkflowActions):
         toolbar.addWidget(button("辅助检测…", self.detect))
         layout.addLayout(toolbar)
         self.waveform = Waveform()
-        self.waveform.epoch_selected.connect(self.select_epoch)
+        self.waveform.epoch_selected.connect(lambda index: self.navigator.choose(index))
         self.waveform.range_selected.connect(self.select_interval)
         layout.addWidget(self.waveform, 1)
+        overview = QHBoxLayout()
+        title = QLabel("Epoch 总览")
+        title.setObjectName("sectionLabel")
+        overview.addWidget(title)
+        legend = QLabel("灰：未检查  ·  绿：保留  ·  红：已拒绝  ·  黄：待复核")
+        legend.setObjectName("muted")
+        overview.addWidget(legend)
+        overview.addStretch()
+        overview.addWidget(self.batch_mark)
+        overview.addWidget(self.batch_keep)
+        layout.addLayout(overview)
         row = QHBoxLayout()
         row.addWidget(button("‹", lambda: self.page(-1)))
-        self.navigator = QListWidget()
-        self.navigator.setViewMode(QListWidget.ViewMode.IconMode)
-        self.navigator.setResizeMode(QListWidget.ResizeMode.Adjust)
-        self.navigator.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.navigator.setGridSize(QSize(42, 30))
-        self.navigator.setMaximumHeight(78)
+        self.navigator = EpochRail()
         self.navigator.itemClicked.connect(lambda item: self.select_epoch(self.navigator.row(item)))
         self.navigator.itemSelectionChanged.connect(self._selection_summary)
         for target in (self.waveform, self.navigator):
@@ -278,6 +364,8 @@ class MainWindow(QMainWindow, WorkflowActions):
                 ("Left", lambda: self.page(-1)),
                 ("Right", lambda: self.page(1)),
             ):
+                if target is self.navigator and sequence in ("Left", "Right"):
+                    continue
                 shortcut = QShortcut(QKeySequence(sequence), target)
                 shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
                 shortcut.activated.connect(callback)
@@ -312,20 +400,25 @@ class MainWindow(QMainWindow, WorkflowActions):
         property_header.addWidget(self.channel_location)
         layout.addLayout(property_header)
         self.spectrum = plot("功率谱 · EEGPrep spectopo")
+        self.spectrum.setMinimumHeight(140)
+        self.spectrum.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self.spectrum.setLabel("bottom", "频率", units="Hz")
         self.spectrum.setLabel("left", "功率 (dB μV²/Hz)")
         self.spectrum_curve = self.spectrum.plot(pen=pg.mkPen("#168b9d", width=1.7))
-        layout.addWidget(self.spectrum)
+        layout.addWidget(self.spectrum, 1)
         image_plot = pg.PlotItem()
         image_plot.setLabel("bottom", "相对事件时间", units="s")
         image_plot.setLabel("left", "Epoch")
         image_plot.getViewBox().setAspectLocked(False)
         self.erp_image = pg.ImageView(view=image_plot)
+        image_plot.getViewBox().setAspectLocked(False)
+        self.erp_image.setMinimumHeight(180)
+        self.erp_image.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self.erp_image.setColorMap(pg.colormap.get("CET-D1"))
         self.erp_image.ui.roiBtn.hide()
         self.erp_image.ui.menuBtn.hide()
         layout.addWidget(QLabel("Epoch × 时间 · 当前工作数据 (μV)"))
-        layout.addWidget(self.erp_image)
+        layout.addWidget(self.erp_image, 1)
         splitter.addWidget(properties)
         splitter.setSizes([330, 760])
         self.stack.addWidget(splitter)
@@ -352,7 +445,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         scroll.setWidgetResizable(True)
         self.ic_container = QWidget()
         self.ic_container.setObjectName("icContainer")
-        self.ic_container.setStyleSheet("QWidget#icContainer { background: #2b333d; }")
+        self.ic_container.setStyleSheet("QWidget#icContainer { background: #f3f6fa; }")
         self.ic_grid = QGridLayout(self.ic_container)
         self.ic_grid.setSpacing(16)
         scroll.setWidget(self.ic_container)
@@ -361,7 +454,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.stack.addWidget(page)
 
     def _inspector(self):
-        dock = QDockWidget("检查与预览", self)
+        dock = QDockWidget("质控判断", self)
         dock.setObjectName("inspector")
         self.inspector = dock
         body = QWidget()
@@ -396,9 +489,19 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.epoch_note.setMaximumHeight(80)
         layout.addWidget(self.epoch_note)
         self.mark_button = button("标记为坏", lambda: self.mark_selected(True))
+        self.mark_button.setObjectName("rejectButton")
         layout.addWidget(self.mark_button)
         self.keep_button = button("确认保留 / 取消拒绝", lambda: self.mark_selected(False))
+        self.keep_button.setProperty("primary", True)
         layout.addWidget(self.keep_button)
+        layout.addStretch()
+        tabs = QTabWidget()
+        self.inspector_tabs = tabs
+        tabs.addTab(body, "当前判断")
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(12)
         self.processing_label = QLabel("当前工作数据：输入")
         self.processing_label.setWordWrap(True)
         layout.addWidget(self.processing_label)
@@ -423,8 +526,9 @@ class MainWindow(QMainWindow, WorkflowActions):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(body)
-        dock.setWidget(scroll)
-        dock.setMinimumWidth(290)
+        tabs.addTab(scroll, "处理与对比")
+        dock.setWidget(tabs)
+        dock.setMinimumWidth(320)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         self.setCorner(Qt.Corner.BottomRightCorner, Qt.DockWidgetArea.RightDockWidgetArea)
         self.views_menu.addAction(dock.toggleViewAction())
@@ -526,6 +630,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.task_result.hide()
         self.pending_task_candidate = None
         self.session = Session(ds)
+        self._sync_dataset_list()
         self._navigator_review = None
         self.current_epoch = self.first_epoch = self.continuous_start = 0
         self.topos.clear()
@@ -569,7 +674,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         self._populate_channel_table()
         self._populate_ics()
         self._sync_state()
-        self.request_render()
+        self.set_workspace(1)
 
     def search_directory(self):
         folder = QFileDialog.getExistingDirectory(self, "选择数据目录")
@@ -600,7 +705,31 @@ class MainWindow(QMainWindow, WorkflowActions):
         else:
             self.statusBar().showMessage("已到数据集队列边界")
 
+    def _next_workspace(self):
+        if self.session is None:
+            return
+        index = self.stack.currentIndex()
+        if index in (1, 2) and self.session.candidate != self.session.review.processing:
+            self.inspector_tabs.setCurrentIndex(1)
+            self.statusBar().showMessage("请先采用或取消候选处理，再进入下一步。")
+            return
+        if index == 3:
+            self.save()
+        else:
+            self.set_workspace({1: 2 if self.session.ica_for() else 0, 2: 0, 0: 3}[index])
+
     def set_workspace(self, index):
+        hints = (
+            "03 / 04   在已采用的处理状态上检查 epochs · 拖动滑轨浏览，Shift 选择范围",
+            "01 / 04   先浏览通道属性，检查坏道；插值或排除后采用处理",
+            "02 / 04   检查 IC 地形与属性；排除成分后采用处理，再检查 epochs",
+            "04 / 04   复核处理、标签和 ERP，保存记录或导出清理后的数据",
+        )
+        self.workflow_hint.setText(hints[index])
+        next_label = ("下一步：结果复核 →", "下一步：IC 检查 →", "下一步：Epoch 检查 →", "保存质控记录")
+        self.next_step.setText(next_label[index])
+        if index == 1 and self.session and not self.session.ica_for():
+            self.next_step.setText("无 ICA · 进入 Epoch 检查 →")
         self.workspace_buttons.button(index).setChecked(True)
         self.stack.setCurrentIndex(index)
         if index == 1:
@@ -653,7 +782,7 @@ class MainWindow(QMainWindow, WorkflowActions):
             )
             self.request_render()
         else:
-            self.select_epoch(int(np.clip(self.first_epoch + direction * 5, 0, ds.n_epochs - 1)))
+            self.navigator.choose(int(np.clip(self.first_epoch + direction * 5, 0, ds.n_epochs - 1)))
 
     def mark_selected(self, rejected):
         if self.session is None:
@@ -802,6 +931,7 @@ class MainWindow(QMainWindow, WorkflowActions):
             self.context.setText(text)
 
     def _sync_state(self):
+        self.epochrank.refresh()
         if self.session is None:
             return
         s, ds = self.session, self.session.dataset
@@ -823,7 +953,7 @@ class MainWindow(QMainWindow, WorkflowActions):
             else "未检查"
         )
         self.current_status.setStyleSheet(
-            "color: #f18a83" if decision and decision.rejected else "color: #a9c2ce"
+            "color: #b84350" if decision and decision.rejected else "color: #48726d"
         )
         self.current_status.setToolTip(f"原始 TrialID: {ds.trial_ids[self.current_epoch]}")
         if decision:
@@ -848,6 +978,8 @@ class MainWindow(QMainWindow, WorkflowActions):
                     self.reason.setCurrentIndex(max(0, self.reason.findData(interval.reason)))
                     self.epoch_note.setPlainText(interval.note)
         pending = s.candidate != s.review.processing
+        if pending:
+            self.inspector_tabs.setCurrentIndex(1)
         self.adopt_button.setEnabled(pending)
         self.mark_button.setEnabled(not pending)
         self.keep_button.setEnabled(not pending)
@@ -855,7 +987,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.keep_button.setText("清除重叠时间标记" if ds.continuous else "确认保留 / 取消拒绝")
         self.batch_mark.setText("标记选中时间段" if ds.continuous else "标记选中 epochs")
         self.batch_keep.setText("清除重叠标记" if ds.continuous else "确认保留")
-        self.workspace_buttons.button(0).setText("时间段检查" if ds.continuous else "Epoch 检查")
+        self.workspace_buttons.button(0).setText("03   时间段检查" if ds.continuous else "03   Epoch 检查")
         self.epoch_note.setPlaceholderText(
             "当前时间段的判断依据…" if ds.continuous else "当前 epoch 的判断依据…"
         )
@@ -905,12 +1037,13 @@ class MainWindow(QMainWindow, WorkflowActions):
             d = decisions.get(i)
             stale_item = d is not None and d.processing != s.review.processing
             state = "待复核" if stale_item else "已拒绝" if i in rejected else "已确认保留" if d else "未检查"
-            color = "#d6ad58" if stale_item else "#f18a83" if i in rejected else "#8bc7aa" if d else "#c8d4df"
+            color = "#936b16" if stale_item else "#ad3547" if i in rejected else "#287464" if d else "#526174"
             if item.data(Qt.ItemDataRole.UserRole) != state:
                 item.setData(Qt.ItemDataRole.UserRole, state)
                 item.setForeground(QColor(color))
-                item.setBackground(QColor("#563c40") if i in rejected else QColor("#2b333d"))
+                item.setBackground(QColor("#fbe4e7") if i in rejected else QColor("#f1f5f8"))
                 item.setToolTip(f"Epoch {i + 1} · {state}")
+        self.navigator.set_position(self.current_epoch, self.first_epoch)
         self._navigator_review = s.review
         for radio in self.ratings.buttons():
             radio.blockSignals(True)
@@ -1251,7 +1384,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         first = (self.ic_page.value() - 1) * 12
         for slot, component in enumerate(range(first, min(first + 12, ds.ica.count))):
             card = QWidget()
-            card.setStyleSheet("background: #303943; border-radius: 4px;")
+            card.setStyleSheet("background: #ffffff; border: 1px solid #dce4eb; border-radius: 8px;")
             layout = QVBoxLayout(card)
             image = QLabel("地形图计算中…")
             image.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1264,7 +1397,7 @@ class MainWindow(QMainWindow, WorkflowActions):
             layout.addWidget(
                 button("查看 IC 属性", lambda checked=False, c=component: self.show_ic_property(c))
             )
-            self.ic_grid.addWidget(card, slot // 4, slot % 4)
+            self.ic_grid.addWidget(card, slot // 3, slot % 3)
             self.ic_widgets.append((component, image))
         self._request_topos()
 
@@ -1529,11 +1662,13 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.jobs.invalidate()
         self.property_jobs.invalidate()
         self.network_jobs.invalidate()
+        self.epochrank.jobs.invalidate()
         self.long_tasks.close()
         if (
             self.jobs.active is not None
             or self.property_jobs.active is not None
             or self.network_jobs.active is not None
+            or self.epochrank.jobs.active is not None
         ):
             event.ignore()
             self.hide()

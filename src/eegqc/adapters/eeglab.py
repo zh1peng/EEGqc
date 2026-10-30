@@ -172,7 +172,7 @@ def component_thumbnail(dataset: Dataset, component: int):
     if dataset.ica is None:
         raise ValueError("This dataset has no ICA decomposition")
     locs = [dataset.chanlocs[i] for i in dataset.ica.channels]
-    figure = Figure(figsize=(2, 2), dpi=100, facecolor="#303943")
+    figure = Figure(figsize=(2, 2), dpi=100, facecolor="#ffffff")
     canvas = FigureCanvasAgg(figure)
     axes = figure.add_axes([0.06, 0.04, 0.88, 0.9])
     topoplot(dataset.ica.mixing[:, component], locs, axes=axes, colormap="RdBu_r", maplimits="absmax")
@@ -200,7 +200,7 @@ def channel_location_thumbnail(dataset, channel):
     from matplotlib.figure import Figure
     from eegprep.functions.sigprocfunc.topoplot import plot_channel_location
 
-    figure = Figure(figsize=(1.5, 1.5), dpi=100, facecolor="#303943")
+    figure = Figure(figsize=(1.5, 1.5), dpi=100, facecolor="#ffffff")
     canvas = FigureCanvasAgg(figure)
     axes = figure.add_axes([0.05, 0.05, 0.9, 0.9])
     plot_channel_location(axes, dataset.chanlocs, channel + 1, markersize=40, color="#ef736d")

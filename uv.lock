@@ -626,6 +626,7 @@ dependencies = [
     { name = "numpy" },
     { name = "pyqtgraph" },
     { name = "pyside6-essentials" },
+    { name = "scikit-learn" },
     { name = "scipy" },
     { name = "threadpoolctl" },
 ]
@@ -657,6 +658,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.1" },
     { name = "pyqtgraph", specifier = ">=0.13.7" },
     { name = "pyside6-essentials", specifier = ">=6.6" },
+    { name = "scikit-learn", specifier = ">=1.6" },
     { name = "scipy", specifier = ">=1.14" },
     { name = "threadpoolctl", specifier = "==3.6.0" },
     { name = "torch", marker = "extra == 'iclabel'", specifier = ">=2.6" },
