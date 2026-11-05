@@ -15,10 +15,9 @@ QPushButton[primary='true'] { background: #078b98; border-color: #078b98; color:
 QPushButton[primary='true']:hover { background: #067784; }
 QPushButton[primary='true']:disabled { background: #edf2f5; border-color: #dce4eb; color: #93a1af; }
 QPushButton#rejectButton { background: #fff1f2; border-color: #e5b5bd; color: #ad3547; }
-QPushButton#workspaceNav { text-align: left; padding: 12px 10px; border: 0; background: transparent; }
-QPushButton#workspaceNav:checked { background: #078b98; color: white; font-weight: 600; }
-QPushButton#workspaceNav:hover { background: #dceff0; color: #086e77; }
-QLabel#brand { color: #173446; font-size: 23px; font-weight: 700; }
+QPushButton#icCard { background: #ffffff; border: 2px solid #dce4eb; padding: 6px; }
+QPushButton#icCard:checked { background: #f9cbd1; border-color: #ce5265; }
+QPushButton#icCard:hover { border-color: #078b98; }
 QLabel#heading { font-size: 20px; font-weight: 600; color: #20384d; }
 QLabel#muted { color: #718195; font-size: 11px; }
 QLabel#sectionLabel { color: #52647a; font-size: 12px; font-weight: 600; padding-top: 12px; padding-bottom: 6px; }
@@ -34,7 +33,6 @@ QTableWidget, QListWidget { background: #ffffff; border: 1px solid #e1e7ed; alte
 QTableWidget::item:selected, QListWidget::item:selected { background: #d9eff0; color: #075e69; }
 QListWidget#datasetList { background: transparent; border: 0; }
 QListWidget#datasetList::item { padding: 10px 5px; border-radius: 4px; }
-QListWidget#rankList::item { padding: 9px 8px; border-bottom: 1px solid #edf1f5; }
 QHeaderView::section { background: #edf3f7; border: 0; padding: 9px; color: #4e6377; }
 QScrollArea, QStackedWidget { border: 0; background: #ffffff; }
 QWidget#inspectorBody { background: #ffffff; }

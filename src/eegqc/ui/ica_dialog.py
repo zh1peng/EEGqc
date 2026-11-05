@@ -23,15 +23,15 @@ class ICAFitDialog(QDialog):
 
     def __init__(self, session, description, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("拟合新 ICA · Extended Infomax")
+        self.setWindowTitle("Fit new ICA · Extended Infomax")
         self.resize(620, 640)
         self.prepared = None
         ds = session.dataset
         layout = QVBoxLayout(self)
         info = QLabel(
-            "输入固定为启动时的已采用状态："
+            "Input is frozen to the applied state at launch: "
             + description
-            + "\n显示滤波不参与拟合。完成后仅生成候选，由您决定采用。"
+            + "\nDisplay filtering is excluded from fitting. Review the result before applying it."
         )
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -49,19 +49,21 @@ class ICAFitDialog(QDialog):
                 else Qt.CheckState.Unchecked
             )
             self.channels.addItem(item)
-        layout.addWidget(QLabel("拟合通道（默认保留的 EEG 通道，按原始通道顺序）"))
+        layout.addWidget(QLabel("Fit channels (default: retained EEG channels, in original order)"))
         layout.addWidget(self.channels)
         form = QFormLayout()
         self.scope = QComboBox()
-        self.scope.addItem("当前未拒绝的时间段" if ds.continuous else "当前未拒绝的 epochs", "retained")
-        self.scope.addItem("全部样本", "all")
-        form.addRow("样本范围", self.scope)
+        self.scope.addItem(
+            "Currently retained intervals" if ds.continuous else "Currently retained epochs", "retained"
+        )
+        self.scope.addItem("All samples", "all")
+        form.addRow("Sample range", self.scope)
         self.dimensions = QSpinBox()
         self.dimensions.setRange(0, ds.n_channels)
-        self.dimensions.setSpecialValueText("使用有效秩")
-        form.addRow("成分数 / PCA 维度", self.dimensions)
+        self.dimensions.setSpecialValueText("Use effective rank")
+        form.addRow("Components / PCA Dimensions", self.dimensions)
         layout.addLayout(form)
-        advanced_toggle = QCheckBox("高级参数")
+        advanced_toggle = QCheckBox("Advanced settings")
         layout.addWidget(advanced_toggle)
         advanced = QWidget()
         advanced_form = QFormLayout(advanced)
@@ -71,21 +73,21 @@ class ICAFitDialog(QDialog):
         self.seed = QSpinBox()
         self.seed.setRange(0, 2147483647)
         self.seed.setValue(0)
-        advanced_form.addRow("最大迭代 maxsteps", self.max_iter)
-        advanced_form.addRow("随机种子", self.seed)
+        advanced_form.addRow("Max iterations maxsteps", self.max_iter)
+        advanced_form.addRow("Random seed", self.seed)
         advanced.setVisible(False)
         advanced_toggle.toggled.connect(advanced.setVisible)
         layout.addWidget(advanced)
-        self.summary = QLabel("先检查所选输入的有效秩、通道数和样本数，再启动拟合。")
+        self.summary = QLabel("Check effective rank, channel count and sample count before fitting.")
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
         row = QHBoxLayout()
-        self.prepare_button = QPushButton("检查输入与有效秩")
+        self.prepare_button = QPushButton("Check input and rank")
         self.prepare_button.clicked.connect(self.prepare_requested)
-        self.fit_button = QPushButton("启动拟合")
+        self.fit_button = QPushButton("Start fitting")
         self.fit_button.setEnabled(False)
         self.fit_button.clicked.connect(lambda: self.fit_requested.emit(self.prepared))
-        close = QPushButton("关闭")
+        close = QPushButton("Close")
         close.clicked.connect(self.close)
         for widget in (self.prepare_button, self.fit_button, close):
             row.addWidget(widget)
@@ -98,7 +100,7 @@ class ICAFitDialog(QDialog):
     def invalidate(self, *_):
         self.prepared = None
         self.fit_button.setEnabled(False)
-        self.summary.setText("输入或参数已更改，请检查有效秩。")
+        self.summary.setText("Input or parameters changed. Check effective rank again.")
 
     def parameters(self):
         return dict(
@@ -117,6 +119,6 @@ class ICAFitDialog(QDialog):
         self.prepared = prepared
         n_components = self.dimensions.value() or prepared.rank
         self.summary.setText(
-            f"已固定输入：{len(prepared.channels)} 通道 × {prepared.sample_count:,} 样本\n有效秩 {prepared.rank}；拟合 {n_components} 个成分。算法：EEGPrep Extended Infomax。"
+            f"Frozen input: {len(prepared.channels)} channels × {prepared.sample_count:,} samples\nEffective rank {prepared.rank}; Fit {n_components} components. Algorithm: EEGPrep Extended Infomax."
         )
         self.fit_button.setEnabled(True)

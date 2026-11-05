@@ -1,11 +1,13 @@
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 
 
 class Waveform(pg.PlotWidget):
     epoch_selected = Signal(int)
     range_selected = Signal(float, float)
+    channel_selected = Signal(int)
+    topography_requested = Signal(int, int, int)
 
     def __init__(self):
         super().__init__(background="#fafbfd")
@@ -18,7 +20,8 @@ class Waveform(pg.PlotWidget):
         self.showGrid(x=False, y=True, alpha=0.12)
         self.getAxis("left").setWidth(60)
         self.getAxis("left").setStyle(hideOverlappingLabels=False)
-        self.setMouseEnabled(x=True, y=False)
+        self.setMouseEnabled(x=False, y=False)
+        self.getPlotItem().hideButtons()
         self.curves = []
         self.reference_curves = []
         self.regions = []
@@ -27,6 +30,14 @@ class Waveform(pg.PlotWidget):
         self.first_epoch = 0
         self.span = 1.0
         self.page_count = 0
+        self.channels = []
+        self.topography_start = None
+        self.topography_region = pg.LinearRegionItem(
+            movable=False, brush=pg.mkBrush(35, 158, 184, 35), pen=pg.mkPen("#269eb0")
+        )
+        self.topography_region.setZValue(-5)
+        self.addItem(self.topography_region)
+        self.topography_region.hide()
         self.time_regions = []
         self.selection = pg.LinearRegionItem(
             (2, 4), brush=pg.mkBrush(35, 158, 184, 25), pen=pg.mkPen("#269eb0", width=1)
@@ -41,8 +52,61 @@ class Waveform(pg.PlotWidget):
         self.visible_window = None
         self.scene().sigMouseClicked.connect(self._clicked)
 
+    def mousePressEvent(self, event):
+        point = self.mapToScene(event.position().toPoint())
+        view = self.getViewBox()
+        if event.button() == Qt.MouseButton.LeftButton and self.channels:
+            if point.x() < view.sceneBoundingRect().left() and self.getAxis(
+                "left"
+            ).sceneBoundingRect().contains(point):
+                y = view.mapSceneToView(point).y()
+                row = round(len(self.channels) - 1 - y / self.channel_spacing)
+                if 0 <= row < len(self.channels):
+                    self.channel_selected.emit(self.channels[row])
+                event.accept()
+                return
+        if event.button() == Qt.MouseButton.RightButton and self.page_count:
+            x = view.mapSceneToView(point).x()
+            if view.sceneBoundingRect().contains(point) and 0 <= x < self.page_count * self.span:
+                self.topography_start = x
+                self.topography_region.setRegion((x, x))
+                self.topography_region.show()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def _topography_bounds(self, point):
+        # A range belongs to its starting epoch; never average across trial boundaries.
+        x = self.getViewBox().mapSceneToView(self.mapToScene(point)).x()
+        epoch = int(self.topography_start / self.span)
+        end = np.clip(x, epoch * self.span, (epoch + 1) * self.span - 1 / self.sfreq)
+        return epoch, sorted((self.topography_start, end))
+
+    def mouseMoveEvent(self, event):
+        if self.topography_start is not None:
+            _, bounds = self._topography_bounds(event.position().toPoint())
+            self.topography_region.setRegion(bounds)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton and self.topography_start is not None:
+            epoch, bounds = self._topography_bounds(event.position().toPoint())
+            samples = [
+                int(np.clip(round((x - epoch * self.span) * self.sfreq), 0, self.samples - 1)) for x in bounds
+            ]
+            self.topography_start = None
+            self.topography_region.hide()
+            self.topography_requested.emit(
+                self.first_epoch + epoch, self.sample_offset + samples[0], self.sample_offset + samples[1] + 1
+            )
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     def _clicked(self, event):
-        if event.button().value != 1 or not self.sceneBoundingRect().contains(event.scenePos()):
+        if event.button().value != 1 or not self.getViewBox().sceneBoundingRect().contains(event.scenePos()):
             return
         x = self.getViewBox().mapSceneToView(event.scenePos()).x()
         index = int(np.floor(x / self.span))
@@ -61,11 +125,18 @@ class Waveform(pg.PlotWidget):
         *,
         continuous_start=0,
         intervals=(),
+        interpolated=(),
     ):
         count, nchan, samples = values.shape
         self.first_epoch = first
         self.page_count = count
         self.span = samples / ds.sfreq
+        self.channels = list(channels)
+        self.channel_spacing = amplitude_uv
+        self.sfreq, self.samples = ds.sfreq, samples
+        self.sample_offset = continuous_start if ds.continuous else 0
+        self.topography_start = None
+        self.topography_region.hide()
         self.selection.setVisible(ds.continuous)
         if ds.continuous and self.last_continuous_window != (ds.data_id, continuous_start, samples):
             self.selection.setBounds((0, self.span))
@@ -109,6 +180,7 @@ class Waveform(pg.PlotWidget):
             offset = (nchan - 1 - row) * height
             y = np.concatenate([np.r_[v, np.nan] for v in values[:, row] * 1e6]) + offset
             curve.setData(x, y)
+            curve.setPen(pg.mkPen("#148d9f" if channels[row] in interpolated else "#2e5368", width=1))
             if reference is not None:
                 ref = np.concatenate([np.r_[v, np.nan] for v in reference[:, row] * 1e6]) + offset
                 self.reference_curves[row].setData(x, ref)
@@ -135,12 +207,17 @@ class Waveform(pg.PlotWidget):
                 region.setRegion((i * self.span, (i + 1) * self.span))
                 bad = first + i in rejected
                 region.setBrush(pg.mkBrush(239, 116, 110, 32) if bad else pg.mkBrush(0, 0, 0, 0))
-                title = f"{first + i + 1:03d}" + (" · 已标记" if bad else "")
-                self.titles[i].setText(title if not ds.continuous else "连续数据 · 秒")
+                title = f"{first + i + 1:03d}" + (" · rejected" if bad else "")
+                self.titles[i].setText(title if not ds.continuous else "Continuous data · seconds")
                 self.titles[i].setPos((i + 0.5) * self.span, top - 0.12 * height)
                 self.zero_lines[i].setValue(i * self.span - ds.tmin)
         self.getAxis("left").setTicks(
-            [[((nchan - 1 - i) * height, ds.labels[ch]) for i, ch in enumerate(channels)]]
+            [
+                [
+                    ((nchan - 1 - i) * height, ds.labels[ch] + (" *" if ch in interpolated else ""))
+                    for i, ch in enumerate(channels)
+                ]
+            ]
         )
         ticks = []
         if ds.continuous:
@@ -151,7 +228,9 @@ class Waveform(pg.PlotWidget):
                     if 0 <= offset < self.span:
                         ticks.append((i * self.span + offset, f"{(ds.tmin + offset) * 1000:.0f}"))
         self.getAxis("bottom").setTicks([ticks])
-        self.setLabel("bottom", "时间 (s)" if ds.continuous else "相对事件时间 (ms)", color="#536170")
+        self.setLabel(
+            "bottom", "Time (s)" if ds.continuous else "Time relative to event (ms)", color="#536170"
+        )
         window = (ds.data_id, first, continuous_start, count, samples)
         if window != self.visible_window:
             self.setXRange(0, count * self.span, padding=0.006)

@@ -14,7 +14,7 @@ from eegqc.ui.main_window import MainWindow
 from test_ui_workflow import wait_for_view
 
 
-def test_scrubbing_range_selection_and_keyboard_keep_exact_epoch_targets():
+def test_scrubbing_and_keyboard_keep_exact_epoch_targets():
     app = QApplication.instance() or QApplication([])
     rail = EpochRail()
     rail.addItems([str(i) for i in range(100)])
@@ -34,7 +34,7 @@ def test_scrubbing_range_selection_and_keyboard_keep_exact_epoch_targets():
     assert chosen[-1] == 70
     assert [rail.row(i) for i in rail.selectedItems()] == [70]
     QTest.mouseClick(rail.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier, point(74))
-    assert [rail.row(i) for i in rail.selectedItems()] == list(range(70, 75))
+    assert [rail.row(i) for i in rail.selectedItems()] == [74]
     QTest.keyClick(rail, Qt.Key.Key_End)
     QTest.keyClick(rail, Qt.Key.Key_Right)
     assert rail.position == 99
@@ -45,7 +45,7 @@ def test_scrubbing_range_selection_and_keyboard_keep_exact_epoch_targets():
     rail.close()
 
 
-def test_preprocessing_first_and_navigation_never_marks_previous_selection():
+def test_epoch_first_with_optional_tools_preserves_position_and_label_targets():
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
     ds = make_demo(18, 20, 100.0, 1.0)
@@ -53,16 +53,25 @@ def test_preprocessing_first_and_navigation_never_marks_previous_selection():
     window.show()
     try:
         wait_for_view(app, window)
-        assert window.stack.currentIndex() == 1
+        assert window.epoch_view.isVisible()
+        window.navigator.choose(5)
+        window.channel_tool.click()
+        assert window.channel_dialog.isVisible() and window.epoch_view.isVisible()
         window._propose(Processing(average_reference=True))
-        window._next_workspace()
-        assert window.stack.currentIndex() == 1
+        window.channel_dialog.close()
+        assert window.epoch_view.isVisible()
+        assert window.current_epoch == 5
+        assert window.session.candidate != window.session.review.processing
+        window.channel_tool.click()
         window.adopt()
-        window._next_workspace()
-        assert window.stack.currentIndex() == 2
-        window._next_workspace()
-        assert window.stack.currentIndex() == 0
+        assert window.epoch_view.isVisible()
+        assert window.current_epoch == 5
+        window.ic_tool.click()
+        assert window.ic_dialog.isVisible() and window.epoch_view.isVisible()
+        window.ic_dialog.close()
+        assert window.epoch_view.isVisible()
         window.navigator.choose(2)
+        wait_for_view(app, window)
         window.waveform.epoch_selected.emit(4)
         wait_for_view(app, window)
         window.mark_selected(True)
@@ -72,8 +81,8 @@ def test_preprocessing_first_and_navigation_never_marks_previous_selection():
         window.mark_selected(True)
         assert window.session.review.rejected == {4, 5}
         window.set_dataset(replace(ds, ica=None, decompositions={}))
-        window._next_workspace()
-        assert window.stack.currentIndex() == 0  # No unavailable ICA stage to complete.
+        assert window.epoch_view.isVisible()
+        assert not window.ic_tool.isEnabled()
     finally:
         window.close()
         wait_for_view(app, window)

@@ -31,12 +31,9 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
-    QSplitter,
-    QStackedWidget,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
-    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -46,13 +43,15 @@ from eegqc.adapters.eeglab import (
     component_properties,
     component_thumbnail,
     channel_location_thumbnail,
+    signal_topography,
     load_set,
 )
 from eegqc.application.persistence import export_labels, restore_session, save_session
 from eegqc.application.session import Session
 from eegqc.demo import make_demo
-from eegqc.ui.epochrank import EpochRankDock
+from eegqc.ui.epochrank import EpochAssistance
 from eegqc.ui.epoch_rail import EpochRail
+from eegqc.ui.properties import SignalProperties
 from eegqc.ui.jobs import Jobs
 from eegqc.ui.long_tasks import LongTasks
 from eegqc.ui.theme import STYLE
@@ -79,7 +78,7 @@ class MainWindow(QMainWindow, WorkflowActions):
     def __init__(self):
         super().__init__()
         pg.setConfigOptions(background="#fafbfd", foreground="#536170")
-        self.setWindowTitle("EEGqc · 人工质量控制")
+        self.setWindowTitle("EEGqc · EEG inspection and quality control")
         self.resize(1500, 1000)
         self.setStyleSheet(STYLE)
         self.session = None
@@ -113,12 +112,11 @@ class MainWindow(QMainWindow, WorkflowActions):
         self._menus()
         self._layout()
         self.configure_workflows()
-        self.epochrank = EpochRankDock(self)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.epochrank)
-        self.algorithm_menu.addAction(self.epochrank.toggleViewAction())
+        self.epochrank.add_track()
+        self._action(self.epoch_actions, "Add assistance indicator", lambda: self.epochrank.add_track())
         self.task_label = QLabel()
-        self.task_cancel = button("取消长任务", self.long_tasks.cancel)
-        self.task_result = button("查看已完成候选", self._show_task_candidate)
+        self.task_cancel = button("Cancel task", self.long_tasks.cancel)
+        self.task_result = button("Inspect completed preview", self._show_task_candidate)
         self.task_result.hide()
         self.pending_task_candidate = None
         self.task_cancel.hide()
@@ -126,10 +124,12 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.statusBar().addPermanentWidget(self.task_result)
         self.statusBar().addPermanentWidget(self.task_cancel)
         self.default_layout = self.saveState()
-        self._action(self.views_menu, "保存当前面板布局", self.save_layout)
-        self._action(self.views_menu, "载入保存的面板布局", self.load_layout)
-        self._action(self.views_menu, "恢复默认面板布局", lambda: self.restoreState(self.default_layout))
-        self.statusBar().showMessage("打开 .set 文件，或从文件菜单载入合成演示数据")
+        self._action(self.views_menu, "Save layout", self.save_layout)
+        self._action(self.views_menu, "Load saved layout", self.load_layout)
+        self._action(
+            self.views_menu, "Restore default layout", lambda: self.restoreState(self.default_layout)
+        )
+        self.statusBar().showMessage("Open .set file, or load synthetic data from the File menu")
 
     def _action(self, menu, text, callback, shortcut=None):
         action = QAction(text, self)
@@ -140,97 +140,106 @@ class MainWindow(QMainWindow, WorkflowActions):
         return action
 
     def _menus(self):
-        files = self.menuBar().addMenu("文件")
+        files = self.menuBar().addMenu("File")
         self.file_menu = files
-        self._action(files, "打开 .set…", self.open_dialog, "Ctrl+O")
-        self._action(files, "搜索数据目录…", self.search_directory)
-        self._action(files, "合成演示数据", lambda: self.open_demo())
+        self._action(files, "Open .set…", self.open_dialog, "Ctrl+O")
+        self._action(files, "Search dataset folder…", self.search_directory)
+        self._action(files, "Synthetic demo", lambda: self.open_demo())
         files.addSeparator()
-        self._action(files, "保存质控记录…", self.save, "Ctrl+S")
-        self._action(files, "恢复质控记录…", self.restore)
-        self._action(files, "导出清理后的 .set…", self.export)
-        self._action(files, "导出人工标签 CSV…", self.labels_export)
-        edit = self.menuBar().addMenu("编辑")
-        self._action(edit, "撤销", lambda: self._history(False), "Ctrl+Z")
-        self._action(edit, "重做", lambda: self._history(True), "Ctrl+Shift+Z")
-        self._action(edit, "标记 / 取消当前 epoch", self.toggle_current)
-        self._action(edit, "上一页", lambda: self.page(-1))
-        self._action(edit, "下一页", lambda: self.page(1))
-        self.views_menu = self.menuBar().addMenu("视图")
-        algorithms = self.menuBar().addMenu("算法")
+        self._action(files, "Save QC records…", self.save, "Ctrl+S")
+        self._action(files, "Restore QC records…", self.restore)
+        self._action(files, "Export cleaned .set…", self.export)
+        self._action(files, "Export reviewed labels CSV…", self.labels_export)
+        edit = self.menuBar().addMenu("Edit")
+        self._action(edit, "Undo", lambda: self._history(False), "Ctrl+Z")
+        self._action(edit, "Redo", lambda: self._history(True), "Ctrl+Shift+Z")
+        self._action(edit, "Toggle epoch rejection", self.toggle_current)
+        self._action(edit, "Previous page", lambda: self.page(-1))
+        self._action(edit, "Next page", lambda: self.page(1))
+        self.views_menu = self.menuBar().addMenu("View")
+        algorithms = self.menuBar().addMenu("Algorithms")
         self.algorithm_menu = algorithms
-        self._action(algorithms, "振幅阈值候选检测…", self.detect)
-        self._action(algorithms, "固定当前工作状态作为对比参考", self.freeze_reference)
-        self._action(algorithms, "恢复固定参考为当前（可撤销）", self.restore_reference)
-        help_menu = self.menuBar().addMenu("帮助")
+        self._action(self.views_menu, "Freeze the applied state as reference", self.freeze_reference)
+        self._action(self.views_menu, "Restore the reference (undoable)", self.restore_reference)
+        help_menu = self.menuBar().addMenu("Help")
         self._action(
             help_menu,
-            "操作说明",
+            "Controls",
             lambda: QMessageBox.information(
                 self,
                 "EEGqc",
-                "B：标记/取消 epoch；方向键：翻页；Ctrl+Z：撤销。\n"
-                "IC 或插值修改先进入候选预览，采用后可继续标记。\n"
-                "质控记录保存为 JSON；清理数据通过文件 → 导出 .set。\n"
-                "合成演示数据只用于体验界面，不是实验数据。",
+                "B: toggle rejection; arrow keys: page; Ctrl+Z: undo.\n"
+                "IC or interpolation changes create a preview. Apply it before labeling.\n"
+                "QC records are saved as JSON; Export cleaned data via File → Export .set.\n"
+                "Synthetic data is for demonstration only.",
             ),
         )
 
     def _layout(self):
-        nav = QToolBar("工作区", self)
-        nav.setMovable(False)
-        self.addToolBar(nav)
-        brand = QLabel("EEGqc   ")
-        brand.setObjectName("brand")
-        nav.addWidget(brand)
-        subtitle = QLabel("信号检查与人工质量控制")
-        subtitle.setObjectName("muted")
-        nav.addWidget(subtitle)
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        nav.addWidget(spacer)
-        nav.addWidget(button("保存质控记录", self.save, True))
         self._navigation()
         root = QWidget()
         layout = QVBoxLayout(root)
         layout.setContentsMargins(18, 10, 18, 12)
         layout.setSpacing(7)
-        self.context = QLabel("尚未载入数据")
+        self.context = QLabel("No dataset loaded")
         self.context.setObjectName("context")
         self.context.setWordWrap(True)
         layout.addWidget(self.context)
-        workflow = QHBoxLayout()
-        self.workflow_hint = QLabel("先检查通道与 IC，再进行 Epoch 判断")
-        self.workflow_hint.setObjectName("muted")
-        self.workflow_hint.setWordWrap(True)
-        workflow.addWidget(self.workflow_hint, 1)
-        self.next_step = button("下一步：IC 检查 →", self._next_workspace)
-        workflow.addWidget(self.next_step)
-        layout.addLayout(workflow)
-        self.stack = QStackedWidget()
-        self.stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self.stack.setMinimumHeight(300)
-        self._epoch_page()
-        self._channel_page()
-        self._ic_page()
+        tools = QHBoxLayout()
+        tools.addWidget(
+            button("Datasets", lambda: self.navigation.setVisible(not self.navigation.isVisible()))
+        )
+        self.channel_tool = button("Channels…", lambda: self.set_workspace(1))
+        self.ic_tool = button("ICs…", lambda: self.set_workspace(2))
+        for item in (self.channel_tool, self.ic_tool):
+            item.setEnabled(False)
+            tools.addWidget(item)
+        hint = QLabel("Click channel names for properties · Right-click / drag for scalp maps")
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        tools.addWidget(hint, 1)
+        layout.addLayout(tools)
+        self.processing_notice = QWidget()
+        notice = QHBoxLayout(self.processing_notice)
+        notice.setContentsMargins(0, 0, 0, 0)
+        self.preview_label = QLabel()
+        self.preview_label.setWordWrap(True)
+        notice.addWidget(self.preview_label, 1)
+        notice.addWidget(button("Apply preview", self.adopt, True))
+        notice.addWidget(button("Reset", self.reset_preview))
+        self.processing_notice.hide()
+        layout.addWidget(self.processing_notice)
+        self.epoch_view = self._epoch_page()
+        layout.addWidget(self.epoch_view, 1)
+        self.channel_properties = SignalProperties()
+        self.ic_properties = SignalProperties()
+        self.bad_channel = QCheckBox("Bad channel · interpolate in live preview")
+        self.bad_channel.toggled.connect(self._mark_property_channel)
+        self.channel_properties.layout().insertWidget(1, self.bad_channel)
+        self.property_label = self.channel_properties.heading
+        self.channel_location = self.channel_properties.map
+        self.channel_dialog = self._property_dialog(
+            "Channels · live interpolation preview", self._channel_page(), self.channel_properties
+        )
+        self.ic_dialog = self._property_dialog(
+            "ICs · live removal preview", self._ic_page(), self.ic_properties
+        )
+        self.review_dialog = QDialog(self)
+        self.review_dialog.setWindowTitle("QC summary")
+        self.review_dialog.resize(600, 600)
         self.review_text = QPlainTextEdit()
         self.review_text.setReadOnly(True)
-        self.stack.addWidget(self.review_text)
-        layout.addWidget(self.stack, 1)
-        footer = QHBoxLayout()
-        footer.addWidget(QLabel("数据集评级"))
-        self.ratings = QButtonGroup(self)
-        for label in ("可用", "待复核", "不可用"):
-            radio = QRadioButton(label)
-            self.ratings.addButton(radio)
-            footer.addWidget(radio)
-            radio.toggled.connect(lambda checked: self._rating_changed() if checked else None)
-        self.dataset_note = QLineEdit()
-        self.dataset_note.setPlaceholderText("数据集备注…")
-        self.dataset_note.editingFinished.connect(self._rating_changed)
-        footer.addWidget(self.dataset_note, 1)
-        footer.addWidget(button("保存并下一份 →", self.save_next, True))
-        layout.addLayout(footer)
+        QVBoxLayout(self.review_dialog).addWidget(self.review_text)
+        self.topography_dialog = QDialog(self)
+        self.topography_dialog.setWindowTitle("Scalp topography")
+        topo_layout = QVBoxLayout(self.topography_dialog)
+        self.topography_caption = QLabel()
+        self.topography_caption.setWordWrap(True)
+        topo_layout.addWidget(self.topography_caption)
+        self.topography_image = QLabel()
+        self.topography_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        topo_layout.addWidget(self.topography_image)
+        self.topography_selection = None
         root.setObjectName("qcBody")
         root.setStyleSheet("QWidget#qcBody { background: #ffffff; }")
         self.setCentralWidget(root)
@@ -238,7 +247,8 @@ class MainWindow(QMainWindow, WorkflowActions):
         self._erp_dock()
 
     def _navigation(self):
-        dock = QDockWidget(self)
+        dock = QDockWidget("Datasets / batch", self)
+        self.navigation = dock
         dock.setObjectName("navigation")
         dock.setTitleBarWidget(QWidget())
         dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
@@ -247,28 +257,14 @@ class MainWindow(QMainWindow, WorkflowActions):
         layout = QVBoxLayout(body)
         layout.setContentsMargins(12, 20, 12, 16)
         layout.setSpacing(10)
-        layout.addWidget(button("打开数据…", self.open_dialog))
-        layout.addWidget(button("搜索数据目录…", self.search_directory))
-        label = QLabel("检查工作区")
-        label.setObjectName("sectionLabel")
-        layout.addWidget(label)
-        self.workspace_buttons = QButtonGroup(self)
-        for i, name in (
-            (1, "01   通道检查"),
-            (2, "02   IC 检查"),
-            (0, "03   Epoch 检查"),
-            (3, "04   结果复核"),
-        ):
-            item = button(name, lambda checked=False, n=i: self.set_workspace(n))
-            item.setObjectName("workspaceNav")
-            item.setCheckable(True)
-            self.workspace_buttons.addButton(item, i)
-            layout.addWidget(item)
-        self.workspace_buttons.button(0).setChecked(True)
-        layout.addWidget(
-            button("EpochRank 推荐", lambda: self.epochrank.setVisible(not self.epochrank.isVisible()))
-        )
-        label = QLabel("当前数据 / 批次")
+        layout.addWidget(button("Open dataset…", self.open_dialog))
+        layout.addWidget(button("Search dataset folder…", self.search_directory))
+        layout.addWidget(button("Save QC records", self.save, True))
+        layout.addWidget(button("Restore QC records…", self.restore))
+        layout.addWidget(button("Export cleaned .set…", self.export))
+        layout.addWidget(button("QC summary…", lambda: self.set_workspace(3)))
+        layout.addWidget(button("Hide sidebar ‹", dock.hide))
+        label = QLabel("Dataset / batch")
         label.setObjectName("sectionLabel")
         layout.addWidget(label)
         self.dataset_list = QListWidget()
@@ -277,16 +273,17 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.dataset_list.itemClicked.connect(self._choose_dataset)
         layout.addWidget(self.dataset_list, 1)
         row = QHBoxLayout()
-        row.addWidget(button("‹ 上一份", lambda: self.next_dataset(-1)))
-        row.addWidget(button("下一份 ›", lambda: self.next_dataset(1)))
+        row.addWidget(button("‹ Previous", lambda: self.next_dataset(-1)))
+        row.addWidget(button("Next ›", lambda: self.next_dataset(1)))
         layout.addLayout(row)
-        note = QLabel("人工判断随处理状态保存\nCtrl+Z 撤销 · Ctrl+S 保存")
+        note = QLabel("Decisions are linked to the signal state\nCtrl+Z Undo · Ctrl+S Save")
         note.setObjectName("muted")
         note.setWordWrap(True)
         layout.addWidget(note)
         dock.setWidget(body)
         dock.setFixedWidth(190)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
+        self.views_menu.addAction(dock.toggleViewAction())
 
     def _choose_dataset(self, item):
         path = item.data(Qt.ItemDataRole.UserRole)
@@ -307,7 +304,7 @@ class MainWindow(QMainWindow, WorkflowActions):
             if path == ds.source:
                 self.dataset_list.setCurrentItem(item)
         if ds.source is None:
-            self.dataset_list.addItem("合成演示数据")
+            self.dataset_list.addItem("Synthetic demo")
             self.dataset_list.setCurrentRow(self.dataset_list.count() - 1)
 
     def _epoch_page(self):
@@ -315,46 +312,48 @@ class MainWindow(QMainWindow, WorkflowActions):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         toolbar = QHBoxLayout()
-        self.batch_mark = button("标记选中 epochs", lambda: self.mark_selected(True))
-        self.batch_keep = button("确认保留", lambda: self.mark_selected(False))
+        self.batch_mark = button("Mark selected epochs", lambda: self.mark_selected(True))
+        self.batch_keep = button("Confirm as good", lambda: self.mark_selected(False))
         self.amplitude = QComboBox()
         self.amplitude.addItems(["25 μV", "50 μV", "100 μV", "200 μV"])
         self.amplitude.setCurrentIndex(1)
         self.amplitude.currentIndexChanged.connect(self.request_render)
-        toolbar.addWidget(QLabel("幅度"))
+        toolbar.addWidget(QLabel("Scale"))
         toolbar.addWidget(self.amplitude)
         self.channel_count = QComboBox()
-        self.channel_count.addItems(["16 通道", "32 通道", "64 通道"])
+        self.channel_count.addItems(["16 channels", "32 channels", "64 channels"])
         self.channel_count.currentIndexChanged.connect(self.request_render)
         toolbar.addWidget(self.channel_count)
         self.channel_start = QSpinBox()
-        self.channel_start.setPrefix("起始通道 ")
+        self.channel_start.setPrefix("First channel ")
         self.channel_start.setMinimum(1)
         self.channel_start.valueChanged.connect(self.request_render)
         toolbar.addWidget(self.channel_start)
         toolbar.addStretch()
-        self.compare = QCheckBox("叠加参考")
+        self.compare = QCheckBox("Overlay reference")
         self.compare.toggled.connect(self.request_render)
         toolbar.addWidget(self.compare)
-        toolbar.addWidget(button("辅助检测…", self.detect))
+        toolbar.addWidget(button("Add assistance", lambda: self.epochrank.add_track()))
         layout.addLayout(toolbar)
         self.waveform = Waveform()
-        self.waveform.epoch_selected.connect(lambda index: self.navigator.choose(index))
+        self.waveform.epoch_selected.connect(self._click_epoch)
         self.waveform.range_selected.connect(self.select_interval)
+        self.waveform.channel_selected.connect(self.show_channel_property)
+        self.waveform.topography_requested.connect(self.show_topography)
         layout.addWidget(self.waveform, 1)
         overview = QHBoxLayout()
-        title = QLabel("Epoch 总览")
+        title = QLabel("Epoch overview")
         title.setObjectName("sectionLabel")
         overview.addWidget(title)
-        legend = QLabel("灰：未检查  ·  绿：保留  ·  红：已拒绝  ·  黄：待复核")
+        legend = QLabel("Gray: unreviewed · Green: kept · Red: rejected · Amber: review again")
         legend.setObjectName("muted")
         overview.addWidget(legend)
         overview.addStretch()
-        overview.addWidget(self.batch_mark)
-        overview.addWidget(self.batch_keep)
+        self.batch_mark.hide()
+        self.batch_keep.hide()
         layout.addLayout(overview)
-        row = QHBoxLayout()
-        row.addWidget(button("‹", lambda: self.page(-1)))
+        row = QGridLayout()
+        row.addWidget(button("‹", lambda: self.page(-1)), 0, 0)
         self.navigator = EpochRail()
         self.navigator.itemClicked.connect(lambda item: self.select_epoch(self.navigator.row(item)))
         self.navigator.itemSelectionChanged.connect(self._selection_summary)
@@ -369,74 +368,58 @@ class MainWindow(QMainWindow, WorkflowActions):
                 shortcut = QShortcut(QKeySequence(sequence), target)
                 shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
                 shortcut.activated.connect(callback)
-        row.addWidget(self.navigator, 1)
+        row.addWidget(self.navigator, 0, 1)
         self.time_window_label = QLabel()
-        row.addWidget(self.time_window_label, 1)
+        row.addWidget(self.time_window_label, 0, 1)
         self.time_window_label.hide()
-        row.addWidget(button("›", lambda: self.page(1)))
+        row.addWidget(button("›", lambda: self.page(1)), 0, 2)
+        self.epochrank = EpochAssistance(self)
+        row.addWidget(self.epochrank, 1, 1)
+        self.navigator.setViewportMargins(
+            0, 0, self.epochrank.scroll.verticalScrollBar().sizeHint().width(), 0
+        )
+        row.setColumnStretch(1, 1)
         layout.addLayout(row)
-        self.epoch_summary = QLabel("B 标记 / 取消 · Ctrl+Z 撤销")
+        self.epoch_summary = QLabel("Click waveform to toggle rejection · Ctrl+Z undo")
         self.epoch_summary.setObjectName("muted")
         layout.addWidget(self.epoch_summary)
-        self.stack.addWidget(page)
+        return page
 
     def _channel_page(self):
-        splitter = QSplitter()
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        hint = QLabel(
+            "Select a channel to inspect its scalp location, spectrum and trial activity on the right.\n"
+            "Mark bad channels for interpolation. Changes update the main waveform immediately."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
         self.channel_table = QTableWidget(0, 3)
-        self.channel_table.setHorizontalHeaderLabels(["通道", "插值预览", "排除导出"])
+        self.channel_table.setHorizontalHeaderLabels(["Channel", "Bad · interpolate", "Exclude from export"])
         self.channel_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.channel_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.channel_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.channel_table.itemChanged.connect(self._channel_changed)
         self.channel_table.currentCellChanged.connect(lambda *_: self._request_property())
-        splitter.addWidget(self.channel_table)
-        properties = QWidget()
-        layout = QVBoxLayout(properties)
-        self.property_label = QLabel("选择通道查看当前工作数据的属性")
-        self.property_label.setWordWrap(True)
-        property_header = QHBoxLayout()
-        property_header.addWidget(self.property_label, 1)
-        self.channel_location = QLabel()
-        self.channel_location.setFixedSize(125, 125)
-        property_header.addWidget(self.channel_location)
-        layout.addLayout(property_header)
-        self.spectrum = plot("功率谱 · EEGPrep spectopo")
-        self.spectrum.setMinimumHeight(140)
-        self.spectrum.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
-        self.spectrum.setLabel("bottom", "频率", units="Hz")
-        self.spectrum.setLabel("left", "功率 (dB μV²/Hz)")
-        self.spectrum_curve = self.spectrum.plot(pen=pg.mkPen("#168b9d", width=1.7))
-        layout.addWidget(self.spectrum, 1)
-        image_plot = pg.PlotItem()
-        image_plot.setLabel("bottom", "相对事件时间", units="s")
-        image_plot.setLabel("left", "Epoch")
-        image_plot.getViewBox().setAspectLocked(False)
-        self.erp_image = pg.ImageView(view=image_plot)
-        image_plot.getViewBox().setAspectLocked(False)
-        self.erp_image.setMinimumHeight(180)
-        self.erp_image.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
-        self.erp_image.setColorMap(pg.colormap.get("CET-D1"))
-        self.erp_image.ui.roiBtn.hide()
-        self.erp_image.ui.menuBtn.hide()
-        layout.addWidget(QLabel("Epoch × 时间 · 当前工作数据 (μV)"))
-        layout.addWidget(self.erp_image, 1)
-        splitter.addWidget(properties)
-        splitter.setSizes([330, 760])
-        self.stack.addWidget(splitter)
+        layout.addWidget(self.channel_table)
+        return page
 
     def _ic_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
         row = QHBoxLayout()
-        row.addWidget(QLabel("选择排除的成分；地形图来自 EEGPrep topoplot"))
+        hint = QLabel("Click a map to exclude / restore. Red = excluded. Right-click for properties only.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
         row.addStretch()
-        row.addWidget(button("清除 IC 选择", self.clear_ics))
+        row.addWidget(button("Reset ICs", self.clear_ics))
         row.addWidget(button("ICLabel…", self.run_iclabel))
-        row.addWidget(button("拟合新 ICA…", self.run_ica))
+        row.addWidget(button("Fit new ICA…", self.run_ica))
         self.ic_context = QLabel()
         self.ic_context.setWordWrap(True)
         layout.addWidget(self.ic_context)
         self.ic_page = QSpinBox()
-        self.ic_page.setPrefix("页 ")
+        self.ic_page.setPrefix("Page ")
         self.ic_page.setMinimum(1)
         self.ic_page.valueChanged.connect(self._populate_ics)
         row.addWidget(self.ic_page)
@@ -451,10 +434,10 @@ class MainWindow(QMainWindow, WorkflowActions):
         scroll.setWidget(self.ic_container)
         layout.addWidget(scroll, 1)
         self.ic_widgets = []
-        self.stack.addWidget(page)
+        return page
 
     def _inspector(self):
-        dock = QDockWidget("质控判断", self)
+        dock = QDockWidget("Properties / decisions", self)
         dock.setObjectName("inspector")
         self.inspector = dock
         body = QWidget()
@@ -462,63 +445,82 @@ class MainWindow(QMainWindow, WorkflowActions):
         layout = QVBoxLayout(body)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(12)
-        self.current_label = QLabel("当前 Epoch")
+        self.current_label = QLabel("Current Epoch")
         self.current_label.setObjectName("heading")
         layout.addWidget(self.current_label)
-        self.current_status = QLabel("未检查")
+        self.current_status = QLabel("Unreviewed")
         layout.addWidget(self.current_status)
         self.reason = QComboBox()
-        self.reason.addItem("不确定 / 待复核", "uncertain")
+        self.reason.addItem("Uncertain / review later", "uncertain")
         for label, value in (
-            ("未分类伪迹", "signal_artifact"),
-            ("眨眼 / 眼动", "eye"),
-            ("肌电", "muscle"),
-            ("电极 / 运动", "movement/electrode"),
-            ("工频", "line_noise"),
-            ("漂移", "drift"),
-            ("平直 / 饱和", "flat/clipping"),
-            ("行为错误", "behavioral"),
-            ("实验筛选", "condition_selection"),
+            ("Unspecified artifact", "signal_artifact"),
+            ("Blink / eye movement", "eye"),
+            ("Muscle", "muscle"),
+            ("Electrode / motion", "movement/electrode"),
+            ("Line noise", "line_noise"),
+            ("Drift", "drift"),
+            ("Flat / clipping", "flat/clipping"),
+            ("Behavioral exclusion", "behavioral"),
+            ("Condition selection", "condition_selection"),
         ):
             self.reason.addItem(label, value)
         self.reason.setCurrentIndex(self.reason.findData("signal_artifact"))
-        layout.addWidget(QLabel("标记原因"))
+        layout.addWidget(QLabel("Decision reason"))
         layout.addWidget(self.reason)
         self.epoch_note = QPlainTextEdit()
-        self.epoch_note.setPlaceholderText("当前 epoch 的判断依据…")
+        self.epoch_note.setPlaceholderText("Current epoch decision notes…")
         self.epoch_note.setMaximumHeight(80)
         layout.addWidget(self.epoch_note)
-        self.mark_button = button("标记为坏", lambda: self.mark_selected(True))
+        self.mark_button = button("Reject", lambda: self.mark_selected(True))
         self.mark_button.setObjectName("rejectButton")
         layout.addWidget(self.mark_button)
-        self.keep_button = button("确认保留 / 取消拒绝", lambda: self.mark_selected(False))
+        self.mark_button.hide()
+        self.keep_button = button("Confirm as good", lambda: self.mark_selected(False))
         self.keep_button.setProperty("primary", True)
         layout.addWidget(self.keep_button)
+        hint = QLabel("Click an epoch waveform to reject it; click again to keep it.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
         layout.addStretch()
+        layout.addWidget(QLabel("Dataset rating"))
+        ratings = QHBoxLayout()
+        self.ratings = QButtonGroup(self)
+        for label, value in (("Usable", "可用"), ("Needs review", "待复核"), ("Unusable", "不可用")):
+            radio = QRadioButton(label)
+            radio.setProperty("rating", value)
+            self.ratings.addButton(radio)
+            ratings.addWidget(radio)
+            radio.toggled.connect(lambda checked: self._rating_changed() if checked else None)
+        layout.addLayout(ratings)
+        self.dataset_note = QLineEdit()
+        self.dataset_note.setPlaceholderText("Dataset notes…")
+        self.dataset_note.editingFinished.connect(self._rating_changed)
+        layout.addWidget(self.dataset_note)
+        layout.addWidget(button("Save / next dataset →", self.save_next, True))
         tabs = QTabWidget()
         self.inspector_tabs = tabs
-        tabs.addTab(body, "当前判断")
+        tabs.addTab(body, "Epoch details")
         body = QWidget()
         layout = QVBoxLayout(body)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(12)
-        self.processing_label = QLabel("当前工作数据：输入")
+        self.processing_label = QLabel("Applied signal: input data")
         self.processing_label.setWordWrap(True)
         layout.addWidget(self.processing_label)
-        self.adopt_button = button("采用预览并继续 QC", self.adopt, True)
+        self.adopt_button = button("Apply preview & continue QC", self.adopt, True)
         layout.addWidget(self.adopt_button)
-        layout.addWidget(button("取消候选预览", self.reset_preview))
-        self.average_ref = QCheckBox("平均参考预览")
+        layout.addWidget(button("Reset preview", self.reset_preview))
+        self.average_ref = QCheckBox("Average-reference preview")
         self.average_ref.toggled.connect(self._reference_changed)
         layout.addWidget(self.average_ref)
         self.erp_toggle_button = button(
-            "显示 / 隐藏条件 ERP", lambda: self.erp_dock.setVisible(not self.erp_dock.isVisible())
+            "Show / hide conditional ERP", lambda: self.erp_dock.setVisible(not self.erp_dock.isVisible())
         )
         layout.addWidget(self.erp_toggle_button)
-        layout.addWidget(button("固定当前状态为对比参考", self.freeze_reference))
-        layout.addWidget(button("恢复固定参考为当前", self.restore_reference))
-        layout.addWidget(QLabel("历史记录"))
-        self.history_label = QLabel("尚无操作")
+        layout.addWidget(button("Freeze applied state as reference", self.freeze_reference))
+        layout.addWidget(button("Restore reference as applied state", self.restore_reference))
+        layout.addWidget(QLabel("History"))
+        self.history_label = QLabel("No changes yet")
         self.history_label.setWordWrap(True)
         self.history_label.setObjectName("muted")
         layout.addWidget(self.history_label)
@@ -526,7 +528,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(body)
-        tabs.addTab(scroll, "处理与对比")
+        tabs.addTab(scroll, "Processing")
         dock.setWidget(tabs)
         dock.setMinimumWidth(320)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
@@ -534,7 +536,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.views_menu.addAction(dock.toggleViewAction())
 
     def _erp_dock(self):
-        self.erp_dock = QDockWidget("条件 ERP · 当前与固定参考", self)
+        self.erp_dock = QDockWidget("Condition ERP · Applied vs. frozen reference", self)
         self.erp_dock.setObjectName("erp")
         body = QWidget()
         layout = QVBoxLayout(body)
@@ -545,22 +547,26 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.condition_value.currentIndexChanged.connect(self.request_render)
         self.erp_channel = QComboBox()
         self.erp_channel.currentIndexChanged.connect(self.request_render)
-        self.erp_baseline = QCheckBox("基线：起点至 0 s")
+        self.erp_baseline = QCheckBox("Baseline: epoch start to 0 s")
         self.erp_baseline.toggled.connect(self.request_render)
         self.erp_comparison = QComboBox()
         self.erp_comparison.addItems(
-            ["整体 QC 前后", "只比较处理效果（相同 trials）", "只比较 epoch 剔除效果"]
+            [
+                "Overall QC before / after",
+                "Compare processing only (same trials)",
+                "Compare only epoch rejection effects",
+            ]
         )
         self.erp_comparison.currentIndexChanged.connect(self.request_render)
-        self.split_conditions = QCheckBox("按条件叠加")
+        self.split_conditions = QCheckBox("Overlay conditions")
         self.split_conditions.toggled.connect(self.request_render)
-        self.use_custom_conditions = QCheckBox("使用组合条件")
+        self.use_custom_conditions = QCheckBox("Use condition queries")
         self.use_custom_conditions.toggled.connect(self.request_render)
         for item in (
-            QLabel("条件"),
+            QLabel("Condition"),
             self.condition_field,
             self.condition_value,
-            QLabel("通道"),
+            QLabel("channels"),
             self.erp_channel,
             self.erp_baseline,
             self.split_conditions,
@@ -570,19 +576,19 @@ class MainWindow(QMainWindow, WorkflowActions):
         advanced = QHBoxLayout()
         advanced.addWidget(self.erp_comparison)
         advanced.addWidget(self.use_custom_conditions)
-        advanced.addWidget(button("编辑条件组合…", self.edit_conditions))
+        advanced.addWidget(button("Edit condition queries…", self.edit_conditions))
         advanced.addStretch()
         layout.addLayout(advanced)
-        self.erp_plot = plot("未载入分段数据")
+        self.erp_plot = plot("No epoched data loaded")
         self.erp_plot.setMinimumHeight(160)
         self.erp_plot.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
-        self.erp_plot.setLabel("bottom", "相对事件时间", units="ms")
+        self.erp_plot.setLabel("bottom", "Time relative to event", units="ms")
         self.erp_plot.getAxis("bottom").enableAutoSIPrefix(False)
-        self.erp_plot.setLabel("left", "振幅", units="μV")
+        self.erp_plot.setLabel("left", "Amplitude", units="μV")
         self.erp_plot.getAxis("left").enableAutoSIPrefix(False)
         self.erp_legend = self.erp_plot.addLegend(offset=(12, 10), colCount=2, labelTextSize="9pt")
-        self.erp_ref_curve = self.erp_plot.plot(pen=pg.mkPen("#929daa", width=1.5), name="参考")
-        self.erp_curve = self.erp_plot.plot(pen=pg.mkPen("#148d9f", width=2), name="当前 / 候选")
+        self.erp_ref_curve = self.erp_plot.plot(pen=pg.mkPen("#929daa", width=1.5), name="Reference")
+        self.erp_curve = self.erp_plot.plot(pen=pg.mkPen("#148d9f", width=2), name="Applied / preview")
         self.condition_curves = {}
         layout.addWidget(self.erp_plot)
         self.erp_dock.setWidget(body)
@@ -592,33 +598,33 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.erp_dock.hide()
 
     def open_dialog(self):
-        path, _ = QFileDialog.getOpenFileName(self, "打开 EEG 数据", "", "EEGLAB (*.set)")
+        path, _ = QFileDialog.getOpenFileName(self, "Open EEG data", "", "EEGLAB (*.set)")
         if path:
             self.open_path(path)
 
     def save_layout(self):
         QSettings("EEGqc", "EEGqc").setValue("layout", self.saveState())
-        self.statusBar().showMessage("面板布局已保存")
+        self.statusBar().showMessage("Layout saved")
 
     def load_layout(self):
         saved = QSettings("EEGqc", "EEGqc").value("layout")
         if saved is not None:
             self.restoreState(saved)
         else:
-            self.statusBar().showMessage("尚未保存面板布局")
+            self.statusBar().showMessage("No saved layout")
 
     def open_demo(self):
         if not self._autosave():
             return
         self.jobs.invalidate()
-        self.statusBar().showMessage("正在生成合成演示数据…")
+        self.statusBar().showMessage("Generating synthetic data…")
         self.jobs.submit("load", make_demo, self.set_dataset)
 
     def open_path(self, path):
         if not self._autosave():
             return
         self.jobs.invalidate()
-        self.statusBar().showMessage("正在通过 EEGPrep 读取数据…")
+        self.statusBar().showMessage("Loading via EEGPrep Loading dataset…")
         self.jobs.submit("load", lambda: load_set(path), self.set_dataset)
 
     def set_dataset(self, ds):
@@ -661,7 +667,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.erp_channel.blockSignals(False)
         self.condition_field.blockSignals(True)
         self.condition_field.clear()
-        self.condition_field.addItem("全部", "")
+        self.condition_field.addItem("All", "")
         for field in ds.conditions:
             self.condition_field.addItem(field, field)
         self.condition_field.blockSignals(False)
@@ -674,13 +680,18 @@ class MainWindow(QMainWindow, WorkflowActions):
         self._populate_channel_table()
         self._populate_ics()
         self._sync_state()
-        self.set_workspace(1)
+        for dialog in (self.channel_dialog, self.ic_dialog, self.review_dialog, self.topography_dialog):
+            dialog.hide()
+        self.topography_selection = None
+        self.set_workspace(0)
 
     def search_directory(self):
-        folder = QFileDialog.getExistingDirectory(self, "选择数据目录")
+        folder = QFileDialog.getExistingDirectory(self, "Choose dataset folder")
         if not folder:
             return
-        pattern, accepted = QInputDialog.getText(self, "搜索数据", "文件名正则表达式", text=r".*\.set$")
+        pattern, accepted = QInputDialog.getText(
+            self, "Search datasets", "Filename regular expression", text=r".*\.set$"
+        )
         if not accepted:
             return
         try:
@@ -692,7 +703,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         if self.queue:
             self.open_path(self.queue[0])
         else:
-            self.statusBar().showMessage("没有找到匹配的数据集")
+            self.statusBar().showMessage("No matching datasets found")
 
     def next_dataset(self, direction=1):
         if self.session is None or not self.queue:
@@ -703,44 +714,130 @@ class MainWindow(QMainWindow, WorkflowActions):
         if 0 <= index < len(self.queue):
             self.open_path(self.queue[index])
         else:
-            self.statusBar().showMessage("已到数据集队列边界")
+            self.statusBar().showMessage("End of the dataset queue")
 
-    def _next_workspace(self):
-        if self.session is None:
-            return
-        index = self.stack.currentIndex()
-        if index in (1, 2) and self.session.candidate != self.session.review.processing:
-            self.inspector_tabs.setCurrentIndex(1)
-            self.statusBar().showMessage("请先采用或取消候选处理，再进入下一步。")
-            return
-        if index == 3:
-            self.save()
-        else:
-            self.set_workspace({1: 2 if self.session.ica_for() else 0, 2: 0, 0: 3}[index])
+    def _property_dialog(self, title, page, properties):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(1000, 680)
+        layout = QVBoxLayout(dialog)
+        row = QHBoxLayout()
+        row.addWidget(page, 1)
+        row.addWidget(properties, 1)
+        layout.addLayout(row, 1)
+        controls = QHBoxLayout()
+        note = QLabel("Changes update the main waveform. Closing keeps the preview; Apply commits it for QC.")
+        note.setWordWrap(True)
+        controls.addWidget(note, 1)
+        controls.addWidget(button("Reset preview", self.reset_preview))
+        controls.addWidget(button("Apply", self.adopt, True))
+        controls.addWidget(button("Close", dialog.close))
+        layout.addLayout(controls)
+        return dialog
 
     def set_workspace(self, index):
-        hints = (
-            "03 / 04   在已采用的处理状态上检查 epochs · 拖动滑轨浏览，Shift 选择范围",
-            "01 / 04   先浏览通道属性，检查坏道；插值或排除后采用处理",
-            "02 / 04   检查 IC 地形与属性；排除成分后采用处理，再检查 epochs",
-            "04 / 04   复核处理、标签和 ERP，保存记录或导出清理后的数据",
-        )
-        self.workflow_hint.setText(hints[index])
-        next_label = ("下一步：结果复核 →", "下一步：IC 检查 →", "下一步：Epoch 检查 →", "保存质控记录")
-        self.next_step.setText(next_label[index])
-        if index == 1 and self.session and not self.session.ica_for():
-            self.next_step.setText("无 ICA · 进入 Epoch 检查 →")
-        self.workspace_buttons.button(index).setChecked(True)
-        self.stack.setCurrentIndex(index)
+        # Auxiliary windows never replace or resize the epoch view.
+        if index == 0:
+            self.waveform.setFocus()
+            self.request_render()
+            return
+        if self.session is None or (index == 2 and self.session.ica_for() is None):
+            return
+        dialog = {1: self.channel_dialog, 2: self.ic_dialog, 3: self.review_dialog}[index]
+        dialog.show()
+        dialog.raise_()
         if index == 1:
             self._request_property()
-        if index == 2:
+        elif index == 2:
             self._populate_ics()
-        if index == 3 and self.session and not self.session.dataset.continuous:
-            self.erp_dock.show()
-        if index == 3 and self.session:
+            self.show_ic_property(min(getattr(self, "active_ic", 0), self.session.ica_for().count - 1))
+        else:
             self._update_review_text()
-        self.request_render()
+
+    def show_channel_property(self, channel):
+        if self.session is None:
+            return
+        self.channel_table.setCurrentCell(channel, 0)
+        self.set_workspace(1)
+
+    def _mark_property_channel(self, checked):
+        item = self.channel_table.item(max(0, self.channel_table.currentRow()), 1)
+        item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+
+    def show_topography(self, epoch, start, stop):
+        if self.session is None:
+            return
+        if (
+            self.rendered_state != (self.session.dataset.data_id, self.session.candidate)
+            or self.rendered_view_revision != self.view_revision
+        ):
+            self.statusBar().showMessage("Wait for the waveform preview to finish updating.")
+            return
+        self.topography_selection = (epoch, start, stop)
+        self.topography_dialog.show()
+        self.topography_dialog.raise_()
+        self._request_topography()
+
+    def _request_topography(self):
+        if not self.topography_dialog.isVisible() or self.topography_selection is None:
+            return
+        s, ds = self.session, self.session.dataset
+        epoch, start, stop = self.topography_selection
+        processing, revision, setting = s.candidate, s.revision, self.display_filter
+        channels = [
+            i
+            for i in range(ds.n_channels)
+            if i not in processing.dropped
+            and str(ds.chanlocs[i].get("type", "EEG")).upper() in ("", "EEG")
+            and self._has_locations(ds, [i])
+        ]
+        self.topography_image.clear()
+        if len(channels) < 3:
+            self.topography_caption.setText(
+                "Scalp maps require at least three retained EEG channels with electrode locations."
+            )
+            return
+        t0 = (0 if ds.continuous else ds.tmin) + start / ds.sfreq
+        t1 = (0 if ds.continuous else ds.tmin) + (stop - 1) / ds.sfreq
+        interval = (
+            f"{t0 * 1000:.0f} ms"
+            if stop == start + 1
+            else f"{t0 * 1000:.0f}–{t1 * 1000:.0f} ms · time average"
+        )
+        caption = ("Continuous data" if ds.continuous else f"Epoch {epoch + 1}") + " · " + interval
+        caption += (
+            "\n"
+            + ("Preview: " if processing != s.review.processing else "Applied: ")
+            + self._describe(processing)
+        )
+        caption += (
+            f"\n{len(channels)} positioned EEG channels · displayed signal · ranges stay within one epoch"
+        )
+        self.topography_caption.setText(caption + "\nUpdating…")
+
+        def compute():
+            values = (
+                s.engine.signal(
+                    processing,
+                    epochs=[epoch],
+                    channels=channels,
+                    samples=slice(start, stop),
+                    display_filter=setting,
+                )[0].mean(axis=1)
+                * 1e6
+            )
+            return signal_topography(ds, channels, values)
+
+        def display(rgba):
+            if self.session is not s or s.revision != revision or self.display_filter != setting:
+                return
+            image = QImage(
+                rgba.data, rgba.shape[1], rgba.shape[0], rgba.strides[0], QImage.Format.Format_RGBA8888
+            ).copy()
+            self.topography_image.setPixmap(QPixmap.fromImage(image))
+            self.topography_caption.setText(caption)
+
+        self.property_jobs.submit("signal-topography", compute, display)
 
     def _condition_values(self):
         self.condition_value.blockSignals(True)
@@ -788,19 +885,19 @@ class MainWindow(QMainWindow, WorkflowActions):
         if self.session is None:
             return
         if self.session.candidate != self.session.review.processing:
-            self.statusBar().showMessage("先采用候选预览，再在该状态上标记")
+            self.statusBar().showMessage("Apply the preview before labeling this signal state")
             return
         if self.rendered_state != (self.session.dataset.data_id, self.session.review.processing):
-            self.statusBar().showMessage("预览更新中，显示当前工作状态后可继续标记。")
+            self.statusBar().showMessage("Updating the view. Wait for the applied signal before labeling.")
             return
         if not self.session.dataset.continuous:
             shown_first = self.session.view_context.get("first_epoch", -5)
             if not shown_first <= self.current_epoch < shown_first + 5:
-                self.statusBar().showMessage("正在切换到所选 epoch，请等待波形显示。")
+                self.statusBar().showMessage("Switching to selected epoch, Wait for the waveform.")
                 return
         if self.session.dataset.continuous:
             if self.session.view_context.get("continuous_start_sample") != self.continuous_start:
-                self.statusBar().showMessage("正在切换时间窗口，请等待波形显示。")
+                self.statusBar().showMessage("Changing the time window. Wait for the waveform.")
                 return
             if self.interval_selection is not None:
                 self.session.mark_interval(
@@ -814,6 +911,17 @@ class MainWindow(QMainWindow, WorkflowActions):
         epochs = [self.navigator.row(i) for i in self.navigator.selectedItems()] or [self.current_epoch]
         self.session.mark(epochs, rejected, self.reason.currentData(), self.epoch_note.toPlainText())
         self._changed()
+
+    def _click_epoch(self, index):
+        if self.session is None or self.session.dataset.continuous:
+            return
+        # Toggle only a waveform that belongs to the currently displayed processing state.
+        if index != self.current_epoch:
+            self.navigator.choose(index)
+        else:
+            self.navigator.clearSelection()
+            self.navigator.item(index).setSelected(True)
+        self.mark_selected(index not in self.session.review.rejected)
 
     def toggle_current(self):
         if self.session is not None:
@@ -836,6 +944,8 @@ class MainWindow(QMainWindow, WorkflowActions):
     def _propose(self, processing):
         self.session.propose(processing)
         self._sync_state()
+        if self.ic_dialog.isVisible() and self.session.ica_for():
+            self.show_ic_property(min(getattr(self, "active_ic", 0), self.session.ica_for().count - 1))
         self.request_render()
 
     def adopt(self):
@@ -879,16 +989,18 @@ class MainWindow(QMainWindow, WorkflowActions):
         if self.session is None or self.session.dataset.continuous:
             return
         count = len(self.navigator.selectedItems()) or 1
-        self.batch_mark.setText(f"标记选中 {count} 个 epochs")
-        self.batch_keep.setText(f"确认保留 {count} 个 epochs")
+        self.batch_mark.setText(f"Mark selected {count} epochs")
+        self.batch_keep.setText(f"Confirm as good {count} epochs")
 
     def _rating_changed(self):
         if self.session is not None and self.ratings.checkedButton():
-            self.session.set_rating(self.ratings.checkedButton().text(), self.dataset_note.text())
+            self.session.set_rating(self.ratings.checkedButton().property("rating"), self.dataset_note.text())
             self._changed()
 
     def _changed(self):
         self._sync_state()
+        if self.ic_dialog.isVisible() and self.session.ica_for():
+            self.show_ic_property(min(getattr(self, "active_ic", 0), self.session.ica_for().count - 1))
         self.request_render()
         self.autosave_timer.start(700)
 
@@ -897,36 +1009,36 @@ class MainWindow(QMainWindow, WorkflowActions):
         parts = []
         if processing.asr:
             parts.append(
-                f"ASR（cutoff={processing.asr.cutoff:g}，输入：{self._describe(processing.asr.parent)}）"
+                f"ASR(cutoff={processing.asr.cutoff:g}, Input: {self._describe(processing.asr.parent)})"
             )
         if processing.decomposition_id:
             ica = self.session.ica_for(processing)
             parts.append(
                 "ICA "
                 + processing.decomposition_id[:8]
-                + "（拟合输入："
+                + "(Fitted input: "
                 + self._describe(ica.input_processing)
-                + "）"
+                + ")"
             )
         if processing.excluded_ics:
-            parts.append("排除 IC " + ", ".join(str(i + 1) for i in processing.excluded_ics))
+            parts.append("Exclude IC " + ", ".join(str(i + 1) for i in processing.excluded_ics))
         if processing.interpolated:
-            parts.append("插值 " + ", ".join(ds.labels[i] for i in processing.interpolated))
+            parts.append("Interpolate " + ", ".join(ds.labels[i] for i in processing.interpolated))
         if processing.dropped:
-            parts.append("排除通道 " + ", ".join(ds.labels[i] for i in processing.dropped))
+            parts.append("Excluded channels " + ", ".join(ds.labels[i] for i in processing.dropped))
         if processing.average_reference:
-            parts.append("平均参考")
-        return "；".join(parts) or "输入数据"
+            parts.append("Average reference")
+        return "; ".join(parts) or "Input data"
 
     def _set_context_badge(self, setting):
         ds = self.session.dataset
-        demo = " · 合成演示" if ds.source is None else ""
-        extent = f"连续 {ds.data.shape[2] / ds.sfreq:.1f} s" if ds.continuous else f"{ds.n_epochs} epochs"
-        text = f"{ds.source.name if ds.source else ds.name}{demo}    |    {ds.n_channels} 通道 · {ds.sfreq:g} Hz · {extent}"
+        demo = " · Synthetic demo" if ds.source is None else ""
+        extent = (
+            f"Continuous {ds.data.shape[2] / ds.sfreq:.1f} s" if ds.continuous else f"{ds.n_epochs} epochs"
+        )
+        text = f"{ds.source.name if ds.source else 'EEGqc'}{demo}    |    {ds.n_channels} channels · {ds.sfreq:g} Hz · {extent}"
         if setting.get("low") or setting.get("high"):
-            text += (
-                f"    |    显示滤波 {setting.get('low') or 0:g}–{setting.get('high') or ds.sfreq / 2:g} Hz"
-            )
+            text += f"    |    Display filter {setting.get('low') or 0:g}–{setting.get('high') or ds.sfreq / 2:g} Hz"
         if self.context.text() != text:
             self.context.setText(text)
 
@@ -942,81 +1054,95 @@ class MainWindow(QMainWindow, WorkflowActions):
         stale_decision = decision is not None and decision.processing != s.review.processing
         self.current_label.setText(f"Epoch {self.current_epoch + 1:03d} / {ds.n_epochs}")
         if ds.continuous:
-            self.current_label.setText("连续数据 · 时间段检查")
+            self.current_label.setText("Continuous data · interval review")
         self.current_status.setText(
-            "旧判断 · 待复核"
+            "Earlier decision · review again"
             if stale_decision
-            else "已标记为坏"
+            else "Rejected"
             if decision and decision.rejected
-            else "已确认保留"
+            else "Kept"
             if decision
-            else "未检查"
+            else "Unreviewed"
         )
         self.current_status.setStyleSheet(
             "color: #b84350" if decision and decision.rejected else "color: #48726d"
         )
-        self.current_status.setToolTip(f"原始 TrialID: {ds.trial_ids[self.current_epoch]}")
+        self.current_status.setToolTip(f"Original TrialID: {ds.trial_ids[self.current_epoch]}")
         if decision:
             self.reason.setCurrentIndex(max(0, self.reason.findData(decision.reason)))
             self.epoch_note.setPlainText(decision.note)
         else:
             self.epoch_note.clear()
         if ds.continuous:
-            self.current_status.setToolTip("时间标记使用原始采样坐标")
+            self.current_status.setToolTip("Interval marks use original sample coordinates")
             if self.interval_selection is None:
-                self.current_status.setText("拖动蓝色范围选择时间段")
+                self.current_status.setText("Drag the blue range to select an interval")
             else:
                 left, right = self.interval_selection
                 overlaps = [d for d in s.review.intervals if d.start < right and d.stop > left]
                 active = [d for d in overlaps if d.processing == s.review.processing]
-                self.current_label.setText(f"时间 {left / ds.sfreq:.2f}–{right / ds.sfreq:.2f} s")
+                self.current_label.setText(f"Time {left / ds.sfreq:.2f}–{right / ds.sfreq:.2f} s")
                 self.current_status.setText(
-                    "已标记删除" if active else "旧时间判断 · 待复核" if overlaps else "已选择 · 尚未标记"
+                    "Marked for removal"
+                    if active
+                    else "Earlier interval decision · review again"
+                    if overlaps
+                    else "Selected · not yet marked"
                 )
                 if overlaps:
                     interval = (active or overlaps)[-1]
                     self.reason.setCurrentIndex(max(0, self.reason.findData(interval.reason)))
                     self.epoch_note.setPlainText(interval.note)
         pending = s.candidate != s.review.processing
-        if pending:
-            self.inspector_tabs.setCurrentIndex(1)
+        self.processing_notice.setVisible(pending)
+        self.preview_label.setText("Live preview: " + self._describe(s.candidate))
         self.adopt_button.setEnabled(pending)
+        self.asr_action.setEnabled(ds.continuous)
+        self.iclabel_action.setEnabled(s.ica_for() is not None)
+        self.epoch_actions.setEnabled(not ds.continuous)
+        self.mark_button.setVisible(ds.continuous)
         self.mark_button.setEnabled(not pending)
         self.keep_button.setEnabled(not pending)
-        self.mark_button.setText("标记选中时间段" if ds.continuous else "标记为坏")
-        self.keep_button.setText("清除重叠时间标记" if ds.continuous else "确认保留 / 取消拒绝")
-        self.batch_mark.setText("标记选中时间段" if ds.continuous else "标记选中 epochs")
-        self.batch_keep.setText("清除重叠标记" if ds.continuous else "确认保留")
-        self.workspace_buttons.button(0).setText("03   时间段检查" if ds.continuous else "03   Epoch 检查")
+        self.mark_button.setText("Mark selected interval" if ds.continuous else "Reject")
+        self.keep_button.setText("Clear overlapping interval marks" if ds.continuous else "Confirm as good")
+        self.batch_mark.setText("Mark selected interval" if ds.continuous else "Mark selected epochs")
+        self.batch_keep.setText("Clear overlapping marks" if ds.continuous else "Confirm as good")
         self.epoch_note.setPlaceholderText(
-            "当前时间段的判断依据…" if ds.continuous else "当前 epoch 的判断依据…"
+            "Notes for this interval…" if ds.continuous else "Current epoch decision notes…"
         )
         self.average_ref.blockSignals(True)
         self.average_ref.setChecked(s.candidate.average_reference)
         self.average_ref.blockSignals(False)
         self.processing_label.setText(
-            "输入：导入时的数据\n已采用："
+            "Input: imported signal\nApplied: "
             + self._describe(s.review.processing)
-            + ("\n候选：" + self._describe(s.candidate) if pending else "")
-            + "\n固定参考："
+            + ("\nPreview: " + self._describe(s.candidate) if pending else "")
+            + "\nFrozen reference: "
             + self._describe(s.reference.processing)
         )
         ica = s.ica_for()
-        self.ic_context.setText(
-            f"分解 {ica.decomposition_id[:8]} · "
-            + ("候选，尚未采用" if pending else "当前已采用")
-            + " · 属性与 ICLabel 使用此分解的拟合输入"
+        self.channel_tool.setEnabled(True)
+        self.ic_tool.setEnabled(ica is not None)
+        self.ic_tool.setToolTip(
+            "Inspect component properties"
             if ica
-            else "当前阶段没有 ICA；可以继续基础 QC 或拟合新 ICA。"
+            else "No ICA decomposition. Fit ICA from Algorithms > Processing if needed."
+        )
+        self.ic_context.setText(
+            f"Decomposition {ica.decomposition_id[:8]} · "
+            + ("Preview, not applied" if pending else "Applied")
+            + " · properties and ICLabel use the fitted input"
+            if ica
+            else "This stage has no ICA; Continue basic QC or fit a new ICA."
         )
         n = len(rejected)
         self.epoch_summary.setText(
-            f"已标记 {n} / {ds.n_epochs} epochs · {100 * n / ds.n_epochs:.1f}%"
-            "     B 标记/取消 · Ctrl+Z 撤销 · Ctrl+单击多选"
+            f"Marked {n} / {ds.n_epochs} epochs · {100 * n / ds.n_epochs:.1f}%"
+            "     Click waveform to toggle rejection · Ctrl+Z undo"
         )
         if ds.continuous:
             self.epoch_summary.setText(
-                f"连续数据 · {len(s.review.intervals)} 个时间标记 · 拖动蓝色选择范围后标记"
+                f"Continuous data · {len(s.review.intervals)} interval marks · drag the blue range to select an interval"
             )
         previous = self._navigator_review
         if previous is s.review:
@@ -1036,7 +1162,15 @@ class MainWindow(QMainWindow, WorkflowActions):
             item = self.navigator.item(i)
             d = decisions.get(i)
             stale_item = d is not None and d.processing != s.review.processing
-            state = "待复核" if stale_item else "已拒绝" if i in rejected else "已确认保留" if d else "未检查"
+            state = (
+                "Needs review"
+                if stale_item
+                else "Rejected"
+                if i in rejected
+                else "Kept"
+                if d
+                else "Unreviewed"
+            )
             color = "#936b16" if stale_item else "#ad3547" if i in rejected else "#287464" if d else "#526174"
             if item.data(Qt.ItemDataRole.UserRole) != state:
                 item.setData(Qt.ItemDataRole.UserRole, state)
@@ -1047,35 +1181,35 @@ class MainWindow(QMainWindow, WorkflowActions):
         self._navigator_review = s.review
         for radio in self.ratings.buttons():
             radio.blockSignals(True)
-            radio.setChecked(radio.text() == s.review.rating)
+            radio.setChecked(radio.property("rating") == s.review.rating)
             radio.blockSignals(False)
         if not self.dataset_note.hasFocus():
             self.dataset_note.setText(s.review.note)
         stale = sum(d.processing != s.review.processing for _, d in s.review.decisions)
         self.history_label.setText(
-            f"{len(s._undo)} 步可撤销 · {len(s.review.decisions)} 个已检查 epochs"
-            + (f"\n{stale} 个判断来自较早处理状态，待复核" if stale else "")
+            f"{len(s._undo)} undo steps · {len(s.review.decisions)} reviewed epochs"
+            + (f"\n{stale} decisions belong to an earlier processing state and need review" if stale else "")
         )
         if ds.continuous:
             stale_intervals = sum(d.processing != s.review.processing for d in s.review.intervals)
             self.history_label.setText(
-                f"{len(s._undo)} 步可撤销 · {len(s.review.intervals)} 个时间标记"
-                + (f"\n{stale_intervals} 个旧时间判断待复核" if stale_intervals else "")
+                f"{len(s._undo)} undo steps · {len(s.review.intervals)} interval marks"
+                + (f"\n{stale_intervals} earlier interval decisions need review" if stale_intervals else "")
             )
         self._selection_summary()
-        if self.stack.currentIndex() == 3:
+        if self.review_dialog.isVisible():
             self._update_review_text()
 
     def _update_review_text(self):
         s, ds = self.session, self.session.dataset
         text = (
-            "当前工作状态\n\n"
+            "Applied state\n\n"
             + self._describe(s.review.processing)
-            + f"\n\nEpoch 剔除：{len(s.review.rejected)} / {ds.n_epochs}\n已人工检查：{len(s.review.decisions)}\n"
-            f"\n评级：{s.review.rating}\n备注：{s.review.note}\n\n"
-            "条件 ERP 可以比较整体 QC、固定 trials 的处理效果和 epoch 剔除效果。\n"
-            "保存记录保留质控决定；文件 → 导出 .set 生成清理后的数据。\n"
-            "导出插值/重参考/删除通道后的数据时，会清除不再适用的 ICA 派生字段。"
+            + f"\n\nEpoch Rejected: {len(s.review.rejected)} / {ds.n_epochs}\nReviewed: {len(s.review.decisions)}\n"
+            f"\nRating: {next((r.text() for r in self.ratings.buttons() if r.property('rating') == s.review.rating), s.review.rating)}\nNotes: {s.review.note}\n\n"
+            "Conditional ERP compares processing, epoch rejection, or overall QC.\n"
+            "Save records to preserve decisions; File → Export .set to create cleaned data.\n"
+            "Exporting interpolated, re-referenced or reduced-channel data clears incompatible ICA derived fields."
         )
         if self.review_text.toPlainText() != text:
             self.review_text.setPlainText(text)
@@ -1083,8 +1217,8 @@ class MainWindow(QMainWindow, WorkflowActions):
     def request_render(self, *_):
         if self.session:
             self.view_revision += 1
-            if not self.context.text().endswith("    |    更新中，保留上次曲线"):
-                self.context.setText(self.context.text() + "    |    更新中，保留上次曲线")
+            if not self.context.text().endswith("    |    Updating; previous curves retained"):
+                self.context.setText(self.context.text() + "    |    Updating; previous curves retained")
             self.render_timer.start(15)
 
     def _request_render(self):
@@ -1098,7 +1232,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         count = int(self.channel_count.currentText().split()[0])
         channels = [i for i in range(start, min(ds.n_channels, start + count)) if i not in candidate.dropped]
         if not channels:
-            self.statusBar().showMessage("当前范围没有保留通道")
+            self.statusBar().showMessage("No retained channels in this range")
             return
         epochs = slice(first, min(first + 5, ds.n_epochs))
         samples = slice(None)
@@ -1114,7 +1248,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         compare = self.compare.isChecked()
         ica = s.ica_for(candidate)
         view_context = {
-            "workspace": self.stack.currentIndex(),
+            "workspace": 0,
             "visible_channels": channels,
             "first_epoch": first,
             "continuous_start_sample": self.continuous_start,
@@ -1179,12 +1313,13 @@ class MainWindow(QMainWindow, WorkflowActions):
                 float(self.amplitude.currentText().split()[0]),
                 continuous_start=continuous_start,
                 intervals=current.active_intervals,
+                interpolated=candidate.interpolated,
             )
             if ds.continuous:
                 stop = min(continuous_start + values.shape[2], ds.data.shape[2])
                 self.time_window_label.setText(
                     f"{continuous_start / ds.sfreq:.1f}–{stop / ds.sfreq:.1f} s / "
-                    f"{ds.data.shape[2] / ds.sfreq:.1f} s    ·    ← → 切换时间窗口"
+                    f"{ds.data.shape[2] / ds.sfreq:.1f} s    ·    ← → Change time window"
                 )
             if erps:
                 self._display_erps(erps, ds.labels[erp_channel])
@@ -1193,19 +1328,21 @@ class MainWindow(QMainWindow, WorkflowActions):
             self.rendered_state = (ds.data_id, candidate)
             self.rendered_view_revision = view_revision
             self.statusBar().showMessage(
-                f"预览更新 {(time.perf_counter() - t0) * 1000:.0f} ms · "
-                "源文件未修改" + (" · 候选尚未采用" if candidate != current.processing else "")
+                f"View updated in {(time.perf_counter() - t0) * 1000:.0f} ms · "
+                "Source file unchanged"
+                + (" · Preview not applied" if candidate != current.processing else "")
             )
 
         self.jobs.submit("render", compute, display)
-        if self.stack.currentIndex() == 1:
+        if self.channel_dialog.isVisible():
             self._request_property()
+        self._request_topography()
 
     def _display_erps(self, erps, channel):
         wanted = set()
         summaries = []
         if len(erps) == 1:
-            for curve, label in ((self.erp_curve, "当前 / 候选"), (self.erp_ref_curve, "参考")):
+            for curve, label in ((self.erp_curve, "Applied / preview"), (self.erp_ref_curve, "Reference")):
                 if self.erp_legend.getLabel(curve) is None:
                     self.erp_legend.addItem(curve, label)
             group, a, b = erps[0]
@@ -1215,7 +1352,7 @@ class MainWindow(QMainWindow, WorkflowActions):
             self.erp_ref_curve.setData(
                 b.times * 1000, b.data[0] * 1e6
             ) if b.data is not None else self.erp_ref_curve.setData([], [])
-            summaries.append(f"{group[1] if group else '全部'} 当前 N={a.count} / 参考 N={b.count}")
+            summaries.append(f"{group[1] if group else 'All'} Current N={a.count} / Reference N={b.count}")
         else:
             self.erp_legend.removeItem(self.erp_curve)
             self.erp_legend.removeItem(self.erp_ref_curve)
@@ -1223,14 +1360,14 @@ class MainWindow(QMainWindow, WorkflowActions):
             self.erp_ref_curve.setData([], [])
             colors = ["#148d9f", "#b06d42", "#7960a0", "#477f52", "#ad5268"]
             for i, (group, a, b) in enumerate(erps):
-                for kind, result in (("当前", a), ("参考", b)):
+                for kind, result in (("Current", a), ("Reference", b)):
                     key = (group, kind)
                     wanted.add(key)
                     if key not in self.condition_curves:
                         pen = pg.mkPen(
                             colors[i % len(colors)],
                             width=1.7,
-                            style=Qt.PenStyle.SolidLine if kind == "当前" else Qt.PenStyle.DashLine,
+                            style=Qt.PenStyle.SolidLine if kind == "Current" else Qt.PenStyle.DashLine,
                         )
                         self.condition_curves[key] = self.erp_plot.plot(pen=pen, name=f"{group[1]} · {kind}")
                     curve = self.condition_curves[key]
@@ -1241,7 +1378,7 @@ class MainWindow(QMainWindow, WorkflowActions):
         for key in list(self.condition_curves):
             if key not in wanted:
                 self.erp_plot.removeItem(self.condition_curves.pop(key))
-        baseline = "基线 起点至 0 s" if self.erp_baseline.isChecked() else "无基线"
+        baseline = "Baseline: epoch start to 0 s" if self.erp_baseline.isChecked() else "No baseline"
         self.erp_plot.setTitle(
             f"{channel} · {baseline} · {self.erp_comparison.currentText()}<br>" + "  |  ".join(summaries),
             color="#526271",
@@ -1301,7 +1438,7 @@ class MainWindow(QMainWindow, WorkflowActions):
             item.setToolTip(
                 ""
                 if enabled
-                else "球面插值需要该 EEG 通道的有效 XYZ 和至少三个定位良好的其他 EEG 通道；波形和人工标记仍可使用。"
+                else "Spherical interpolation requires this EEG valid channel XYZ and at least three other well-located EEG channels; waveform review remains available."
             )
         self.channel_table.blockSignals(blocked)
 
@@ -1321,15 +1458,21 @@ class MainWindow(QMainWindow, WorkflowActions):
         self._set_interpolation_availability()
 
     def _request_property(self):
-        if self.session is None or self.stack.currentIndex() != 1:
+        if self.session is None or not self.channel_dialog.isVisible():
             return
         s, ds = self.session, self.session.dataset
         channel = max(0, self.channel_table.currentRow())
+        mark = self.channel_table.item(channel, 1)
+        self.bad_channel.blockSignals(True)
+        self.bad_channel.setChecked(mark.checkState() == Qt.CheckState.Checked)
+        self.bad_channel.setEnabled(bool(mark.flags() & Qt.ItemFlag.ItemIsEnabled))
+        self.bad_channel.setToolTip(mark.toolTip())
+        self.bad_channel.blockSignals(False)
         processing, revision = s.candidate, s.revision
         self.property_request += 1
         request = self.property_request
         display_filter = self.display_filter
-        self.property_label.setText(f"{ds.labels[channel]} · 属性更新中（保留上次曲线）")
+        self.property_label.setText(f"{ds.labels[channel]} · updating properties (previous curves retained)")
 
         def compute():
             values = s.engine.signal(processing, channels=[channel], display_filter=display_filter)[:, 0]
@@ -1338,30 +1481,24 @@ class MainWindow(QMainWindow, WorkflowActions):
             return freqs, psd, values * 1e6, location
 
         def display(result):
-            if self.session is not s or revision != s.revision or request != self.property_request:
+            if (
+                self.session is not s
+                or revision != s.revision
+                or request != self.property_request
+                or not self.channel_dialog.isVisible()
+            ):
                 return
             freqs, psd, values, location = result
-            if location is not None:
-                image = QImage(
-                    location.data,
-                    location.shape[1],
-                    location.shape[0],
-                    location.strides[0],
-                    QImage.Format.Format_RGBA8888,
-                ).copy()
-                self.channel_location.setPixmap(
-                    QPixmap.fromImage(image).scaled(125, 125, Qt.AspectRatioMode.KeepAspectRatio)
-                )
-            else:
-                self.channel_location.setText("缺少电极位置")
-            owner = "候选" if processing != s.review.processing else "已采用"
-            self.property_label.setText(
-                f"{ds.labels[channel]} · {owner}：{self._describe(processing)} · 显示滤波仅观看"
-            )
-            self.spectrum_curve.setData(freqs, psd)
-            bound = max(1.0, float(np.percentile(np.abs(values), 98)))
-            self.erp_image.setImage(
-                values.T, autoRange=True, levels=(-bound, bound), pos=(ds.tmin, 0), scale=(1 / ds.sfreq, 1)
+            owner = "Preview" if processing != s.review.processing else "Applied"
+            self.channel_properties.display(
+                title=f"Channel {ds.labels[channel]} · {owner}",
+                dataset=ds,
+                values=values,
+                freqs=freqs,
+                psd=psd,
+                location=location,
+                units="µV",
+                context=f"{self._describe(processing)}. Display filtering affects this view only.",
             )
 
         self.property_jobs.submit("property", compute, display)
@@ -1379,38 +1516,52 @@ class MainWindow(QMainWindow, WorkflowActions):
         self.ic_page.setMaximum(max(1, ((ds.ica.count if ds.ica else 0) + 11) // 12))
         self.ic_page.blockSignals(False)
         if ds.ica is None:
-            self.ic_grid.addWidget(QLabel("该数据没有 ICA 分解；Epoch 和通道检查仍可使用。"), 0, 0)
+            self.ic_grid.addWidget(
+                QLabel(
+                    "This dataset has no ICA decomposition; Epoch and channel inspection remain available."
+                ),
+                0,
+                0,
+            )
             return
         first = (self.ic_page.value() - 1) * 12
         for slot, component in enumerate(range(first, min(first + 12, ds.ica.count))):
-            card = QWidget()
-            card.setStyleSheet("background: #ffffff; border: 1px solid #dce4eb; border-radius: 8px;")
-            layout = QVBoxLayout(card)
-            image = QLabel("地形图计算中…")
-            image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            image.setMinimumSize(165, 150)
-            check = QCheckBox(f"排除 IC {component + 1:02d}")
-            check.setChecked(component in self.session.candidate.excluded_ics)
-            check.toggled.connect(lambda checked, c=component: self._ic_changed(c, checked))
-            layout.addWidget(image, 1)
-            layout.addWidget(check)
-            layout.addWidget(
-                button("查看 IC 属性", lambda checked=False, c=component: self.show_ic_property(c))
+            card = QPushButton()
+            card.setMinimumHeight(150)
+            card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            card.setObjectName("icCard")
+            card.setCheckable(True)
+            card.setChecked(component in self.session.candidate.excluded_ics)
+            card.setToolTip(
+                "Click to exclude / restore; right-click to inspect without changing the preview."
             )
+            layout = QVBoxLayout(card)
+            image = QLabel("Loading scalp map…")
+            image.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            image.setMinimumSize(100, 95)
+            layout.addWidget(image)
+            label = QLabel(f"IC {component + 1:02d}")
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            layout.addWidget(label)
+            card.clicked.connect(lambda checked, c=component: self._click_ic(c, checked))
+            card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            card.customContextMenuRequested.connect(lambda point, c=component: self.show_ic_property(c))
             self.ic_grid.addWidget(card, slot // 3, slot % 3)
             self.ic_widgets.append((component, image))
         self._request_topos()
 
     def _request_topos(self):
         s = self.session
-        if self.stack.currentIndex() != 2:
+        if not self.ic_dialog.isVisible():
             return
         components = [component for component, _ in self.ic_widgets]
         ds = replace(s.dataset, ica=s.ica_for())
         decomposition_id = ds.ica.decomposition_id
         if not self._has_locations(ds, ds.ica.channels):
             for _, image in self.ic_widgets:
-                image.setText("缺少电极位置\n仍可查看 IC 活动与属性")
+                image.setText("No electrode locations\nYou can still inspect IC activity and properties")
             return
 
         def compute():
@@ -1438,8 +1589,8 @@ class MainWindow(QMainWindow, WorkflowActions):
                 ).copy()
                 image.setPixmap(
                     QPixmap.fromImage(qimage).scaled(
-                        165,
-                        165,
+                        110,
+                        110,
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation,
                     )
@@ -1452,69 +1603,50 @@ class MainWindow(QMainWindow, WorkflowActions):
         values.add(component) if checked else values.discard(component)
         self._propose(replace(self.session.candidate, excluded_ics=tuple(sorted(values))))
 
+    def _click_ic(self, component, excluded):
+        self.active_ic = component
+        self._ic_changed(component, excluded)
+
     def show_ic_property(self, component):
         s = self.session
         processing = s.candidate
         ds = replace(s.dataset, ica=s.ica_for(processing))
+        self.active_ic = component
         self.ic_property_request += 1
         request = self.ic_property_request
-        self.statusBar().showMessage(f"计算 IC {component + 1} 属性…")
+        self.ic_properties.heading.setText(f"IC {component + 1:02d} · loading properties…")
+
+        def compute():
+            activations, freqs, psd = component_properties(s.component_dataset(processing), component)
+            location = (
+                component_thumbnail(ds, component) if self._has_locations(ds, ds.ica.channels) else None
+            )
+            return activations, freqs, psd, location
 
         def display(result):
-            if self.session is not s or request != self.ic_property_request:
+            if (
+                self.session is not s
+                or request != self.ic_property_request
+                or not self.ic_dialog.isVisible()
+                or s.ica_for() is None
+                or s.ica_for().decomposition_id != ds.ica.decomposition_id
+            ):
                 return
-            activations, freqs, psd = result
-            dialog = QDialog(self)
-            dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-            dialog.setWindowTitle(f"IC {component + 1:02d} · 分解 {ds.ica.decomposition_id[:8]} 的属性")
-            dialog.resize(1000, 650)
-            layout = QVBoxLayout(dialog)
-            layout.addWidget(
-                QLabel(
-                    f"分解 {ds.ica.decomposition_id} · 活动基于此分解的拟合输入；清理效果在波形工作区查看。"
-                )
-            )
-            activity = plot("IC 活动 · 前 5 个 epochs")
-            for i, epoch in enumerate(activations[:5]):
-                activity.plot(
-                    ds.times + i * len(ds.times) / ds.sfreq, epoch, pen=pg.mkPen("#168b9d", width=1)
-                )
-            activity.setLabel("left", "激活 (原 ICA 尺度)")
-            activity.setLabel("bottom", "时间", units="s")
-            layout.addWidget(activity)
-            spectrum = plot("IC 投影功率谱 · EEGPrep compute_spectra")
-            spectrum.plot(freqs, psd, pen=pg.mkPen("#168b9d", width=1.5))
-            spectrum.setLabel("bottom", "频率", units="Hz")
-            spectrum.setLabel("left", "投影功率 (dB)")
-            layout.addWidget(spectrum)
-            self.property_dialog = dialog
-            dialog.show()
-
-        self.property_jobs.submit(
-            "ic-property", lambda: component_properties(s.component_dataset(processing), component), display
-        )
-
-    def detect(self):
-        if self.session is None or self.session.dataset.continuous:
-            self.statusBar().showMessage("振幅候选检测目前用于分段数据")
-            return
-        threshold, ok = QInputDialog.getDouble(self, "振幅阈值", "绝对振幅阈值 (μV)", 100, 1, 10000, 1)
-        if not ok:
-            return
-        s, revision, proc = self.session, self.session.revision, self.session.candidate
-
-        def done(indices):
-            if self.session is not s or revision != s.revision:
-                return
-            self.navigator.clearSelection()
-            for index in indices:
-                self.navigator.item(int(index)).setSelected(True)
-                s.suggestions[int(index)] = (f"amplitude_threshold:{threshold:g}uV;processing={proc}",)
-            self.statusBar().showMessage(
-                f"发现 {len(indices)} 个候选；仅选中，尚未写入人工标签。确认后可标记。"
+            values, freqs, psd, location = result
+            self.ic_properties.display(
+                title=f"IC {component + 1:02d} · {'Excluded' if component in s.candidate.excluded_ics else 'Retained'}"
+                + (" · preview" if s.candidate != s.review.processing else " · applied"),
+                dataset=ds,
+                values=values,
+                freqs=freqs,
+                psd=psd,
+                location=location,
+                units="ICA units",
+                context=f"Decomposition {ds.ica.decomposition_id[:8]} · fitted input. "
+                "IC activity is shown before component removal; the spectrum uses its scalp projection.",
             )
 
-        self.jobs.submit("detect", lambda: s.engine.amplitude_candidates(proc, threshold), done)
+        self.property_jobs.submit("ic-property", compute, display)
 
     def _autosave(self):
         if self.session and self.session_path and self.session.revision != self.session.saved_revision:
@@ -1529,13 +1661,15 @@ class MainWindow(QMainWindow, WorkflowActions):
         if self.session is None:
             return False
         if self.session_path is None:
-            path, _ = QFileDialog.getSaveFileName(self, "保存质控记录", "review.eegqc.json", "JSON (*.json)")
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save QC records", "review.eegqc.json", "JSON (*.json)"
+            )
             if not path:
                 return False
             self.session_path = Path(path)
         try:
             save_session(self.session, self.session_path)
-            self.statusBar().showMessage(f"记录已保存：{self.session_path}")
+            self.statusBar().showMessage(f"Records saved: {self.session_path}")
             return True
         except OSError as error:
             self.report_error(str(error))
@@ -1548,7 +1682,7 @@ class MainWindow(QMainWindow, WorkflowActions):
     def restore(self):
         if self.session is None:
             return
-        path, _ = QFileDialog.getOpenFileName(self, "恢复质控记录", "", "JSON (*.json)")
+        path, _ = QFileDialog.getOpenFileName(self, "Restore QC records", "", "JSON (*.json)")
         if path:
             try:
                 restore_session(self.session, path)
@@ -1565,7 +1699,7 @@ class MainWindow(QMainWindow, WorkflowActions):
             return
         ds = self.session.dataset
         default = str(ds.source.with_name("qced_" + ds.source.name)) if ds.source else "qced_demo.set"
-        path, _ = QFileDialog.getSaveFileName(self, "导出当前已采用状态", default, "EEGLAB (*.set)")
+        path, _ = QFileDialog.getSaveFileName(self, "Export the applied state", default, "EEGLAB (*.set)")
         if path:
             from eegqc.application.long_tasks import export_task
 
@@ -1577,35 +1711,37 @@ class MainWindow(QMainWindow, WorkflowActions):
                 data_id=ds.data_id,
                 input_state=s.review.processing,
                 output_path=path,
-                callback=lambda saved: self.statusBar().showMessage(f"已导出：{saved}"),
+                callback=lambda saved: self.statusBar().showMessage(f"Exported: {saved}"),
                 valid=lambda: self.session is s,
             )
 
     def labels_export(self):
         if self.session is None:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "导出已人工检查的标签", "eegqc_labels.csv", "CSV (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export reviewed labels", "eegqc_labels.csv", "CSV (*.csv)"
+        )
         if path:
             try:
                 export_labels(self.session, path)
-                self.statusBar().showMessage(f"已导出人工标签：{path}")
+                self.statusBar().showMessage(f"Labels exported: {path}")
             except OSError as error:
                 self.report_error(str(error))
 
     def report_error(self, message):
-        self.statusBar().showMessage("操作未完成：" + message)
-        self.processing_label.setText("操作未完成：" + message)
+        self.statusBar().showMessage("Action incomplete: " + message)
+        self.processing_label.setText("Action incomplete: " + message)
 
     def _job_error(self, message):
-        self.statusBar().showMessage("操作未完成：" + message)
+        self.statusBar().showMessage("Action incomplete: " + message)
         if self.session and self.session.candidate != self.session.review.processing:
             self.processing_label.setText(
-                "候选预览不可用：" + message + "\n可取消候选预览，保留已有工作状态。"
+                "Preview unavailable: " + message + "\nReset the preview to retain the applied state."
             )
         dialog = getattr(self, "ica_dialog", None)
         if dialog is not None and dialog.isVisible():
             dialog.prepare_button.setEnabled(True)
-            dialog.summary.setText("操作未完成：" + message)
+            dialog.summary.setText("Action incomplete: " + message)
 
     def _long_task_changed(self, record):
         running = record.status in ("running", "cancelling")
@@ -1614,11 +1750,11 @@ class MainWindow(QMainWindow, WorkflowActions):
         names = {
             "asr": "ASR",
             "ica": "ICA",
-            "ica-input": "ICA 输入检查",
-            "export": "导出",
-            "contribution": "贡献包导出",
+            "ica-input": "ICA Input check",
+            "export": "Export",
+            "contribution": "Export contribution",
         }
-        states = {"succeeded": "已完成", "failed": "失败", "cancelled": "已取消"}
+        states = {"succeeded": "Completed", "failed": "failed", "cancelled": "Canceled"}
         self.task_label.setText(
             f"{names.get(record.kind, record.kind)} · {states.get(record.status, record.stage)} · {record.elapsed:.0f} s"
         )
@@ -1627,9 +1763,9 @@ class MainWindow(QMainWindow, WorkflowActions):
             if dialog is not None and dialog.isVisible():
                 dialog.prepare_button.setEnabled(True)
                 dialog.summary.setText(
-                    "输入检查已取消，可调整选择后重新检查。"
+                    "Input check canceled. Adjust the selection and check again."
                     if record.status == "cancelled"
-                    else "输入检查失败，请检查选择或参数。"
+                    else "Input check failed. Review the selection and parameters."
                 )
 
     def _receive_task_candidate(self, session, original_processing, original_candidate, apply):
@@ -1639,10 +1775,12 @@ class MainWindow(QMainWindow, WorkflowActions):
             self.pending_task_candidate = (session, apply)
             self.task_result.show()
             self.statusBar().showMessage(
-                "计算已完成，期间处理状态已更改。点击“查看已完成候选”可检查原输入的结果。"
+                "Computation finished after the processing state changed. Click“Inspect completed preview”to inspect the result for its original input."
             )
             self.processing_label.setText(
-                self.processing_label.text() + "\n已完成任务的输入：" + self._describe(original_processing)
+                self.processing_label.text()
+                + "\nCompleted task input: "
+                + self._describe(original_processing)
             )
 
     def _show_task_candidate(self):
@@ -1657,6 +1795,8 @@ class MainWindow(QMainWindow, WorkflowActions):
         if not self._autosave():
             event.ignore()
             return
+        for dialog in (self.channel_dialog, self.ic_dialog, self.review_dialog, self.topography_dialog):
+            dialog.hide()
         self.render_timer.stop()
         self.autosave_timer.stop()
         self.jobs.invalidate()

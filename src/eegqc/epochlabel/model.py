@@ -159,8 +159,8 @@ def predict_features(model, values):
     return expit(normalized @ np.asarray(model["coefficients"]) + model["intercept"])
 
 
-def predict_epochs(session, model):
-    processing = session.review.processing
+def predict_epochs(session, model, *, processing=None):
+    processing = session.review.processing if processing is None else processing
     retained = [i for i in range(session.dataset.n_channels) if i not in processing.dropped]
     matrix = []
     for epoch in range(session.dataset.n_epochs):

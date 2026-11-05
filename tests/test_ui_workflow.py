@@ -25,6 +25,8 @@ def wait_for_view(app, window):
             and not window.jobs.pending
             and window.property_jobs.active is None
             and not window.property_jobs.pending
+            and window.epochrank.jobs.active is None
+            and not window.epochrank.jobs.pending
         ):
             return
         sleep(0.005)
@@ -166,18 +168,18 @@ def test_new_decomposition_stays_candidate_and_old_decision_needs_review(monkeyp
     window.adopt()
     wait_for_view(app, window)
     assert not window.session.review.rejected
-    assert "旧判断" in window.current_status.text()
-    assert "待复核" in window.navigator.item(0).toolTip()
+    assert "Earlier decision" in window.current_status.text()
+    assert "Needs review" in window.navigator.item(0).toolTip()
     window.mark_selected(False)
     assert dict(window.session.review.decisions)[0].processing.decomposition_id == new.decomposition_id
-    assert "已确认保留" in window.navigator.item(0).toolTip()
+    assert "Kept" in window.navigator.item(0).toolTip()
     window.restore_reference()
     assert window.session.review.rejected == {0}
     assert window.session.ica_for() is ds.ica
-    assert "已拒绝" in window.navigator.item(0).toolTip()
+    assert "Rejected" in window.navigator.item(0).toolTip()
     window._history(False)
     assert window.session.ica_for() is new
-    assert "已确认保留" in window.navigator.item(0).toolTip()
+    assert "Kept" in window.navigator.item(0).toolTip()
     wait_for_view(app, window)
     window.close()
 
@@ -208,8 +210,8 @@ def test_completed_task_does_not_replace_later_processing_and_basic_qc_needs_no_
     assert s.review.rejected == {0}
     window.set_workspace(1)
     wait_for_view(app, window)
-    assert "已采用" in window.property_label.text()
-    assert window.channel_location.text() == "缺少电极位置"
+    assert "Applied" in window.property_label.text()
+    assert window.channel_location.text() == "No electrode locations"
     source = make_demo(18, 12, 100.0, 1.0)
     locations = [dict(loc) for loc in source.chanlocs]
     locations[4].pop("theta")

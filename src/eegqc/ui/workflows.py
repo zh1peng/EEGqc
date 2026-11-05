@@ -1,6 +1,4 @@
 from dataclasses import asdict, replace
-import json
-from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt
@@ -36,19 +34,20 @@ class WorkflowActions:
         self.display_filter = DisplayFilter()
         self.interval_selection = None
         self.rater_id = local_rater_id()
-        algorithms = self.algorithm_menu
-        self._action(algorithms, "从已采用状态拟合新 ICA…", self.run_ica)
-        self._action(algorithms, "ICLabel 分类与选择…", self.run_iclabel)
-        self._action(algorithms, "ASR 连续数据预览…", self.run_asr)
-        self._action(algorithms, "EpochLabel 试验模型建议…", self.run_epochlabel)
-        self._action(self.views_menu, "显示滤波（波形与 ERP）…", self.configure_display_filter)
-        self._action(self.file_menu, "导出 EpochLabel 贡献包…", self.contribute)
-        self._action(self.file_menu, "上传已检查的贡献包…", self.upload_contribution)
-        self._action(self.file_menu, "撤回已上传贡献…", self.withdraw_contribution)
+        processing = self.algorithm_menu.addMenu("Processing · creates a preview")
+        self._action(processing, "Fit ICA on applied data…", self.run_ica)
+        self.asr_action = self._action(processing, "ASR · continuous data only…", self.run_asr)
+        components = self.algorithm_menu.addMenu("IC assistance · review suggestions")
+        self.iclabel_action = self._action(components, "ICLabel probabilities…", self.run_iclabel)
+        self.epoch_actions = self.algorithm_menu.addMenu("Epoch assistance · review suggestions")
+        self._action(self.views_menu, "Display filter (waveforms and ERP)…", self.configure_display_filter)
+        self._action(self.file_menu, "Export EpochLabel contribution…", self.contribute)
+        self._action(self.file_menu, "Upload reviewed contribution…", self.upload_contribution)
+        self._action(self.file_menu, "Withdraw uploaded contribution…", self.withdraw_contribution)
 
     def _submit_long_task(self, *args, **kwargs):
         if self.long_tasks.busy:
-            self.statusBar().showMessage("已有长任务正在执行或取消，请等待完成后再启动。")
+            self.statusBar().showMessage("A task is running or canceling. Wait before starting another.")
             return False
         try:
             self.long_tasks.submit(*args, **kwargs)
@@ -84,9 +83,11 @@ class WorkflowActions:
 
     def configure_display_filter(self):
         dialog = QDialog(self)
-        dialog.setWindowTitle("显示滤波")
+        dialog.setWindowTitle("Display filter")
         form = QFormLayout(dialog)
-        enabled = QCheckBox("用于波形、属性与 ERP 预览；不写入导出数据")
+        enabled = QCheckBox(
+            "Applies to waveforms, properties and ERP view only; not applied to exported data"
+        )
         enabled.setChecked(self.display_filter != DisplayFilter())
         low, high = QDoubleSpinBox(), QDoubleSpinBox()
         for item in (low, high):
@@ -96,8 +97,8 @@ class WorkflowActions:
         low.setValue(self.display_filter.low or 1.0)
         high.setValue(self.display_filter.high or 40.0)
         form.addRow(enabled)
-        form.addRow("高通（0 关闭）", low)
-        form.addRow("低通（0 关闭）", high)
+        form.addRow("High-pass (0 off)", low)
+        form.addRow("Low-pass (0 off)", high)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -114,18 +115,21 @@ class WorkflowActions:
 
     def run_iclabel(self):
         if self.session is None or self.session.ica_for() is None:
-            self.statusBar().showMessage("当前阶段没有 ICA；可以继续基础 QC，或先拟合新 ICA。")
+            self.statusBar().showMessage("This stage has no ICA; Continue basic QC, or first fit a new ICA.")
             return
+        self.set_workspace(2)
         s = self.session
         processing = s.candidate
         ds = replace(s.dataset, ica=s.ica_for(processing))
         if not self._has_locations(ds, ds.ica.channels):
-            self.statusBar().showMessage("ICLabel 需要电极位置；波形与人工标记仍可使用。")
+            self.statusBar().showMessage(
+                "ICLabel requires electrode locations; waveform review remains available."
+            )
             return
         if s.iclabel and s.iclabel["decomposition_id"] == ds.ica.decomposition_id:
             self.show_iclabel(s.iclabel)
             return
-        self.statusBar().showMessage(f"ICLabel 正在后台分类分解 {ds.ica.decomposition_id[:8]}…")
+        self.statusBar().showMessage(f"ICLabel Classifying decomposition {ds.ica.decomposition_id[:8]}…")
 
         def done(report):
             if (
@@ -147,10 +151,16 @@ class WorkflowActions:
             k: report[k] for k in ("algorithm", "backend", "decomposition_id")
         }
         dialog = QDialog(self)
-        dialog.setWindowTitle(f"ICLabel · 分解 {report['decomposition_id'][:8]} 的概率建议")
+        dialog.setWindowTitle(
+            f"ICLabel · Decomposition {report['decomposition_id'][:8]} probability suggestions"
+        )
         dialog.resize(1100, 600)
         layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel("概率仅作为辅助；勾选后进入候选预览，采用后才改变工作状态。"))
+        layout.addWidget(
+            QLabel(
+                "Probabilities are suggestions. Select components to preview, then apply the processing change."
+            )
+        )
         choices = QHBoxLayout()
         categories = []
         for name in report["classes"]:
@@ -162,12 +172,12 @@ class WorkflowActions:
         threshold.setRange(0.01, 1.0)
         threshold.setSingleStep(0.05)
         threshold.setValue(0.8)
-        choices.addWidget(QLabel("概率阈值"))
+        choices.addWidget(QLabel("Probability threshold"))
         choices.addWidget(threshold)
         layout.addLayout(choices)
         matrix = np.asarray(report["probabilities"])
         table = QTableWidget(len(matrix), 8)
-        table.setHorizontalHeaderLabels(["排除 IC", *report["classes"]])
+        table.setHorizontalHeaderLabels(["Exclude IC", *report["classes"]])
         for row, probabilities in enumerate(matrix):
             item = QTableWidgetItem(f"IC {row + 1:02d}")
             item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
@@ -196,7 +206,7 @@ class WorkflowActions:
         )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("选择并预览")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Preview selected exclusions")
         layout.addWidget(buttons)
         if dialog.exec():
             selected = tuple(
@@ -221,7 +231,7 @@ class WorkflowActions:
         def prepare():
             parameters = dialog.parameters()
             dialog.prepare_button.setEnabled(False)
-            dialog.summary.setText("正在检查固定输入与有效秩…")
+            dialog.summary.setText("Checking frozen input and effective rank…")
 
             def done(prepared):
                 if not dialog.isVisible():
@@ -246,7 +256,9 @@ class WorkflowActions:
 
         def fit(prepared):
             if self.session is not s:
-                dialog.summary.setText("数据集已切换，请关闭后从当前数据集重新开始。")
+                dialog.summary.setText(
+                    "Dataset changed. Close this dialog and start again from the current dataset."
+                )
                 return
 
             original_candidate = s.candidate
@@ -256,7 +268,9 @@ class WorkflowActions:
                 self._populate_ics()
                 self._sync_state()
                 self.request_render()
-                self.statusBar().showMessage("新 ICA 已生成候选；检查 IC 后采用并继续 QC。")
+                self.statusBar().showMessage(
+                    "New ICA preview ready. Inspect the components, then apply to continue QC."
+                )
 
             def done(ica):
                 self._receive_task_candidate(
@@ -282,13 +296,19 @@ class WorkflowActions:
 
     def run_asr(self):
         if self.session is None or not self.session.dataset.continuous:
-            self.statusBar().showMessage("ASR 用于连续数据；不将独立 epochs 拼接成连续信号。")
+            self.statusBar().showMessage(
+                "ASR requires continuous data; separate epochs are not concatenated into continuous data."
+            )
             return
         s, ds = self.session, self.session.dataset
         dialog = QDialog(self)
-        dialog.setWindowTitle("ASR 后台预览")
+        dialog.setWindowTitle("ASR background preview")
         form = QFormLayout(dialog)
-        form.addRow(QLabel("选择校准区间。ASR 结果保留采样坐标；采用后原 ICA 不再用于新阶段。"))
+        form.addRow(
+            QLabel(
+                "Choose a calibration interval.ASR Results preserve sample coordinates. After applying, the original ICA is not reused for the new stage."
+            )
+        )
         cutoff, start, stop, highpass = [QDoubleSpinBox() for _ in range(4)]
         cutoff.setRange(1, 100)
         cutoff.setValue(20)
@@ -300,10 +320,10 @@ class WorkflowActions:
         highpass.setRange(0, 10)
         highpass.setDecimals(2)
         highpass.setValue(0.5)
-        form.addRow("截止标准差", cutoff)
-        form.addRow("校准起点", start)
-        form.addRow("校准终点", stop)
-        form.addRow("处理前高通 Hz（0 不另滤波）", highpass)
+        form.addRow("Cutoff (standard deviations)", cutoff)
+        form.addRow("Calibration start", start)
+        form.addRow("Calibration end", stop)
+        form.addRow("Preprocessing high-pass Hz(0 no extra filtering)", highpass)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -316,7 +336,7 @@ class WorkflowActions:
         original_processing, original_candidate = s.review.processing, s.candidate
         config = ASRConfig(parent, cutoff.value(), start.value(), stop.value(), highpass.value() or None)
         candidate = Processing(dropped=parent.dropped, asr=config)
-        self.statusBar().showMessage("正在准备 ASR 候选，完成后可与参考比较…")
+        self.statusBar().showMessage("Preparing ASR preview; compare with the reference when complete…")
         from eegqc.application.long_tasks import asr_task
 
         def done(value):
@@ -346,20 +366,24 @@ class WorkflowActions:
             return
         s = self.session
         dialog = QDialog(self)
-        dialog.setWindowTitle("EpochLabel · 检查贡献内容")
+        dialog.setWindowTitle("EpochLabel · Review contribution contents")
         form = QFormLayout(dialog)
-        form.addRow(QLabel("仅导出已人工检查 epochs，包含判断时的信号状态；不含文件路径与自由文本备注。"))
+        form.addRow(
+            QLabel(
+                "Export only reviewed epochs, Includes the signal state used for each judgment; excludes file paths and free-text notes."
+            )
+        )
         fields = {}
         for key, label in (
-            ("lab", "实验室匿名 ID"),
-            ("study", "研究匿名 ID"),
-            ("participant", "被试匿名 ID（跨文件保持一致）"),
-            ("recording", "记录匿名 ID"),
+            ("lab", "Anonymous lab ID"),
+            ("study", "Anonymous study ID"),
+            ("participant", "Anonymous participant ID(consistent across files)"),
+            ("recording", "Anonymous recording ID"),
         ):
             edit = QLineEdit(s.contribution_groups.get(key, ""))
             fields[key] = edit
             form.addRow(label, edit)
-        waves = QCheckBox("包含判断时的多通道波形，供研究特征与模型训练")
+        waves = QCheckBox("Include reviewed multichannel waveforms for research and model training")
         waves.setChecked(True)
         form.addRow(waves)
         condition_fields = QListWidget()
@@ -371,13 +395,15 @@ class WorkflowActions:
             item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked if name == "condition" else Qt.CheckState.Unchecked)
             condition_fields.addItem(item)
-        form.addRow("可分享的条件字段（检查示例值）", condition_fields)
-        consent = QCheckBox("我已检查贡献字段，并有权分享这些数据用于 EpochLabel 研究")
+        form.addRow("Condition fields to share (inspect sample values)", condition_fields)
+        consent = QCheckBox(
+            "I have reviewed these fields and am authorized to share this data for EpochLabel research"
+        )
         form.addRow(consent)
         counts = {}
         for _, d in s.review.decisions:
             counts[d.quality] = counts.get(d.quality, 0) + 1
-        form.addRow(QLabel(f"待导出：{counts}；匿名评分者：{self.rater_id[:8]}…"))
+        form.addRow(QLabel(f"To export: {counts}; Anonymous rater: {self.rater_id[:8]}…"))
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -388,7 +414,7 @@ class WorkflowActions:
         form.addRow(buttons)
         if not dialog.exec():
             return
-        path, _ = QFileDialog.getSaveFileName(self, "保存贡献包", "epochlabel.zip", "ZIP (*.zip)")
+        path, _ = QFileDialog.getSaveFileName(self, "Save contribution", "epochlabel.zip", "ZIP (*.zip)")
         if not path:
             return
         from copy import copy
@@ -418,12 +444,12 @@ class WorkflowActions:
             data_id=s.dataset.data_id,
             input_state=s.review.processing,
             output_path=path,
-            callback=lambda result: self.statusBar().showMessage(f"贡献包已导出：{result}"),
+            callback=lambda result: self.statusBar().showMessage(f"Contribution exported: {result}"),
             valid=lambda: self.session is s,
         )
 
     def upload_contribution(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择已检查的贡献包", "", "ZIP (*.zip)")
+        path, _ = QFileDialog.getOpenFileName(self, "Choose reviewed contribution", "", "ZIP (*.zip)")
         if not path:
             return
         from eegqc.epochlabel.bundle import read_manifest
@@ -435,22 +461,22 @@ class WorkflowActions:
             self.report_error(str(error))
             return
         dialog = QDialog(self)
-        dialog.setWindowTitle("确认发送贡献包")
+        dialog.setWindowTitle("Confirm contribution upload")
         form = QFormLayout(dialog)
         form.addRow(
             QLabel(
-                f"{len(manifest['samples'])} 个已检查样本；波形：{manifest['include_waveforms']}\n"
-                f"匿名分组：{manifest['groups']}"
+                f"{len(manifest['samples'])} reviewed samples; waveforms: {manifest['include_waveforms']}\n"
+                f"Anonymous groups: {manifest['groups']}"
             )
         )
         endpoint, token = QLineEdit("http://127.0.0.1:8765"), QLineEdit()
         token.setEchoMode(QLineEdit.EchoMode.Password)
-        form.addRow("研究项目接收地址", endpoint)
-        form.addRow("项目令牌（不保存）", token)
+        form.addRow("Project receiver URL", endpoint)
+        form.addRow("Project token (not saved)", token)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("发送此贡献包")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Upload this contribution")
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -459,26 +485,32 @@ class WorkflowActions:
             self.network_jobs.submit(
                 "upload",
                 lambda: upload_bundle(path, url, secret),
-                lambda result: self.statusBar().showMessage(f"已接收；凭据已保存：{result['receipt_file']}"),
+                lambda result: self.statusBar().showMessage(
+                    f"Received; receipt saved: {result['receipt_file']}"
+                ),
             )
 
     def withdraw_contribution(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择上传凭据", "", "Receipt (*.receipt.json)")
+        path, _ = QFileDialog.getOpenFileName(self, "Choose upload receipt", "", "Receipt (*.receipt.json)")
         if not path:
             return
         from eegqc.epochlabel.client import withdraw_bundle
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("撤回贡献包")
+        dialog.setWindowTitle("Withdraw contribution")
         form = QFormLayout(dialog)
-        form.addRow(QLabel("使用原研究项目令牌撤回此凭据对应的贡献包。"))
+        form.addRow(
+            QLabel(
+                "Use the original project token to withdraw the contribution associated with this receipt."
+            )
+        )
         token = QLineEdit()
         token.setEchoMode(QLineEdit.EchoMode.Password)
-        form.addRow("项目令牌", token)
+        form.addRow("Project token", token)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("撤回此贡献包")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Withdraw this contribution")
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -487,33 +519,5 @@ class WorkflowActions:
             self.network_jobs.submit(
                 "withdraw",
                 lambda: withdraw_bundle(path, secret),
-                lambda result: self.statusBar().showMessage(f"已撤回：{result['removed']}"),
+                lambda result: self.statusBar().showMessage(f"Withdrawn: {result['removed']}"),
             )
-
-    def run_epochlabel(self):
-        if self.session is None or self.session.dataset.continuous:
-            return
-        path, _ = QFileDialog.getOpenFileName(self, "选择本地 EpochLabel 试验模型", "", "JSON (*.json)")
-        if not path:
-            return
-        from eegqc.epochlabel.model import predict_epochs
-
-        try:
-            model = json.loads(Path(path).read_text(encoding="utf-8"))
-        except (ValueError, OSError) as error:
-            self.report_error(str(error))
-            return
-        s, revision = self.session, self.session.revision
-
-        def done(probabilities):
-            if self.session is not s or revision != s.revision:
-                return
-            self.navigator.clearSelection()
-            for i in np.flatnonzero(probabilities >= 0.5):
-                self.navigator.item(int(i)).setSelected(True)
-                s.suggestions[int(i)] = (
-                    f"EpochLabel-logistic-baseline:{model.get('model_id', 'unversioned')}:p={probabilities[i]:.4f}",
-                )
-            self.statusBar().showMessage("已选中试验模型候选（p≥0.5），请人工检查；尚未写入标签。")
-
-        self.jobs.submit("epochlabel", lambda: predict_epochs(s, model), done)

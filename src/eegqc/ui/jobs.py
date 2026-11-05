@@ -28,6 +28,7 @@ class Jobs(QObject):
     """One numeric worker; repeated view requests coalesce instead of building a queue."""
 
     failed = Signal(str)
+    failed_job = Signal(object, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -44,7 +45,11 @@ class Jobs(QObject):
         self.pending[key] = (ticket, function, callback)
         self._next()
 
-    def invalidate(self):
+    def invalidate(self, key=None):
+        if key is not None:
+            self.pending.pop(key, None)
+            self.tickets[key] = self.tickets.get(key, 0) + 1
+            return
         self.pending.clear()
         for key in self.tickets:
             self.tickets[key] += 1
@@ -65,6 +70,7 @@ class Jobs(QObject):
         self.active = None
         if self.tickets[key] == ticket:
             if error:
+                self.failed_job.emit(key, error)
                 self.failed.emit(error)
             else:
                 callback(result)

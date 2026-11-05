@@ -1,6 +1,6 @@
 """A scrub rail backed by the same epoch selection model as QC actions."""
 
-from PySide6.QtCore import QItemSelectionModel, QRectF, Qt
+from PySide6.QtCore import QEvent, QItemSelectionModel, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QAbstractItemView, QListWidget, QToolTip
 
@@ -8,8 +8,8 @@ from PySide6.QtWidgets import QAbstractItemView, QListWidget, QToolTip
 class EpochRail(QListWidget):
     def __init__(self):
         super().__init__()
-        self.setAccessibleName("Epoch 检查滑轨")
-        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setAccessibleName("Epoch review rail")
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setFixedHeight(48)
@@ -17,14 +17,16 @@ class EpochRail(QListWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.position = 0
         self.first_visible = 0
-        self.anchor = 0
         self.dragging = False
-        self.range_drag = False
         self.wheel_distance = 0
+        self.hover_timer = QTimer(self)
+        self.hover_timer.setSingleShot(True)
+        self.hover_timer.setInterval(650)
+        self.hover_timer.timeout.connect(self._show_hover)
+        self.hover_index = None
+        self.hover_point = None
 
     def set_position(self, position, first_visible):
-        if position != self.position and not self.dragging:
-            self.anchor = position
         self.position, self.first_visible = position, first_visible
         self.viewport().update()
 
@@ -42,14 +44,12 @@ class EpochRail(QListWidget):
             return
         track = self.track()
         width = track.width() / self.count()
-        colors = {"已拒绝": "#f28691", "已确认保留": "#a5cfc5", "待复核": "#e8ca87"}
+        colors = {"Rejected": "#f28691", "Kept": "#a5cfc5", "Needs review": "#e8ca87"}
         for index in range(self.count()):
             item = self.item(index)
             color = colors.get(item.data(Qt.ItemDataRole.UserRole), "#e4e9ef")
             rect = QRectF(track.left() + index * width, track.top(), max(1, width - 1), track.height())
             painter.fillRect(rect, QColor(color))
-            if item.isSelected():
-                painter.fillRect(rect, QColor(0, 139, 152, 55))
         painter.setPen(QPen(QColor("#8bbfc4"), 1))
         painter.drawRect(
             QRectF(
@@ -64,37 +64,22 @@ class EpochRail(QListWidget):
         painter.setBrush(QColor(255, 255, 255, 160))
         painter.drawRoundedRect(QRectF(x - 3, track.top() - 5, 6, track.height() + 10), 2, 2)
 
-    def choose(self, index, *, extend=False, toggle=False):
+    def choose(self, index):
         if not self.count():
             return
         index = max(0, min(self.count() - 1, index))
-        self.setCurrentRow(index, QItemSelectionModel.SelectionFlag.NoUpdate)
-        if extend:
-            self.clearSelection()
-            for i in range(min(self.anchor, index), max(self.anchor, index) + 1):
-                self.item(i).setSelected(True)
-        elif toggle:
-            self.item(index).setSelected(not self.item(index).isSelected())
-            self.anchor = index
-        else:
-            self.clearSelection()
-            self.item(index).setSelected(True)
-            self.anchor = index
+        self.setCurrentRow(index, QItemSelectionModel.SelectionFlag.ClearAndSelect)
         self.position = index
         self.viewport().update()
         self.itemClicked.emit(self.item(index))
 
     def mousePressEvent(self, event):
+        self._stop_hover()
         if event.button() != Qt.MouseButton.LeftButton or not self.count():
             return
         self.setFocus(Qt.FocusReason.MouseFocusReason)
         self.dragging = True
-        self.range_drag = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-        self.choose(
-            self.epoch_at(event.position().x()),
-            extend=self.range_drag,
-            toggle=bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier),
-        )
+        self.choose(self.epoch_at(event.position().x()))
 
     def mouseMoveEvent(self, event):
         if not self.count():
@@ -102,23 +87,52 @@ class EpochRail(QListWidget):
         index = self.epoch_at(event.position().x())
         if self.dragging:
             if index != self.position:
-                self.choose(index, extend=self.range_drag)
+                self.choose(index)
         else:
-            state = self.item(index).data(Qt.ItemDataRole.UserRole) or "未检查"
-            QToolTip.showText(
-                event.globalPosition().toPoint(),
-                f"{state} · {(index + 1) / self.count():.0%}  |  拖动浏览 · Shift 选择范围",
-                self,
-            )
+            point = event.globalPosition().toPoint()
+            if (
+                index != self.hover_index
+                or self.hover_point is None
+                or (point - self.hover_point).manhattanLength() > 4
+            ):
+                QToolTip.hideText()
+                self.hover_index, self.hover_point = index, point
+                self.hover_timer.start()
+
+    def _show_hover(self):
+        if self.hover_index is not None and self.hover_index < self.count() and not self.dragging:
+            state = self.item(self.hover_index).data(Qt.ItemDataRole.UserRole) or "Unreviewed"
+            QToolTip.showText(self.hover_point, f"Epoch {self.hover_index + 1} · {state}", self)
+
+    def _stop_hover(self):
+        self.hover_timer.stop()
+        self.hover_index = self.hover_point = None
+        QToolTip.hideText()
+
+    def leaveEvent(self, event):
+        self._stop_hover()
+        super().leaveEvent(event)
+
+    def viewportEvent(self, event):
+        if event.type() == QEvent.Type.ToolTip:
+            return True  # The custom rail geometry and dwell timer own hover hints.
+        return super().viewportEvent(event)
+
+    def clear(self):
+        self._stop_hover()
+        self.dragging = False
+        self.wheel_distance = 0
+        super().clear()
 
     def mouseReleaseEvent(self, event):
         if self.dragging:
             index = self.epoch_at(event.position().x())
             if index != self.position:
-                self.choose(index, extend=self.range_drag)
+                self.choose(index)
         self.dragging = False
 
     def wheelEvent(self, event):
+        self._stop_hover()
         delta = event.pixelDelta().x() or event.pixelDelta().y()
         threshold = 20 if delta else 120
         self.wheel_distance += delta or event.angleDelta().x() or event.angleDelta().y()
@@ -138,8 +152,6 @@ class EpochRail(QListWidget):
             Qt.Key.Key_End: self.count() - 1,
         }
         if event.key() in targets:
-            self.choose(
-                targets[event.key()], extend=bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-            )
+            self.choose(targets[event.key()])
         else:
             super().keyPressEvent(event)

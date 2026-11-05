@@ -21,10 +21,14 @@ class ConditionsDialog(QDialog):
     def __init__(self, dataset, queries, parent=None):
         super().__init__(parent)
         self.dataset, self.queries = dataset, dict(queries)
-        self.setWindowTitle("ERP 条件组合与叠加")
+        self.setWindowTitle("ERP Condition queries and overlays")
         self.resize(850, 480)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("每个命名条件生成一条 ERP；行间可选 AND / OR。数值比较只用于数值字段。"))
+        layout.addWidget(
+            QLabel(
+                "Each named condition produces an ERP; Join rules with AND / OR.Numeric comparisons require numeric fields."
+            )
+        )
         body = QHBoxLayout()
         self.names = QListWidget()
         self.names.addItems(self.queries)
@@ -33,22 +37,22 @@ class ConditionsDialog(QDialog):
         editor = QWidget()
         form = QVBoxLayout(editor)
         self.name = QLineEdit()
-        self.name.setPlaceholderText("条件名称，例如 target_correct")
+        self.name.setPlaceholderText("Condition name, e.g. target_correct")
         self.mode = QComboBox()
-        self.mode.addItem("全部满足 AND", "all")
-        self.mode.addItem("任一满足 OR", "any")
+        self.mode.addItem("Match all AND", "all")
+        self.mode.addItem("Match any OR", "any")
         form.addWidget(self.name)
         form.addWidget(self.mode)
         self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["字段", "运算符", "值（in 用逗号分隔）"])
+        self.table.setHorizontalHeaderLabels(["Field", "Operator", "Value (in comma-separated)"])
         self.table.horizontalHeader().setStretchLastSection(True)
         form.addWidget(self.table)
         row = QHBoxLayout()
         for text, callback in (
-            ("添加规则", self.add_row),
-            ("删除选中规则", self.remove_row),
-            ("保存此条件", self.save_query),
-            ("删除此条件", self.remove_query),
+            ("Add rule", self.add_row),
+            ("Delete selected rule", self.remove_row),
+            ("Save condition", self.save_query),
+            ("Delete condition", self.remove_query),
         ):
             item = QPushButton(text)
             item.clicked.connect(callback)
@@ -98,7 +102,7 @@ class ConditionsDialog(QDialog):
     def save_query(self):
         name = self.name.text().strip()
         if not name:
-            name, ok = QInputDialog.getText(self, "条件名称", "名称")
+            name, ok = QInputDialog.getText(self, "Condition name", "Name")
             if not ok or not name.strip():
                 return False
         clauses = tuple(
@@ -113,21 +117,21 @@ class ConditionsDialog(QDialog):
         try:
             count = int(query.mask(self.dataset).sum())
         except (ValueError, KeyError) as error:
-            QMessageBox.warning(self, "条件无效", str(error))
+            QMessageBox.warning(self, "Invalid condition", str(error))
             return False
         self.queries[name.strip()] = query
         self.names.blockSignals(True)
         self.names.clear()
         self.names.addItems(self.queries)
         self.names.blockSignals(False)
-        self.count.setText(f"{name}: {count} trials（尚未扣除人工拒绝）")
+        self.count.setText(f"{name}: {count} trials(before manual rejection)")
         return True
 
     def apply_queries(self):
         has_values = any(self.table.cellWidget(row, 2).text() for row in range(self.table.rowCount()))
         if self.name.text().strip() or has_values:
             if not self.name.text().strip():
-                self.name.setText(f"条件 {len(self.queries) + 1}")
+                self.name.setText(f"Condition {len(self.queries) + 1}")
             if not self.save_query():
                 return
         self.accept()

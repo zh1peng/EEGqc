@@ -209,6 +209,32 @@ def channel_location_thumbnail(dataset, channel):
     return np.asarray(canvas.buffer_rgba()).copy()
 
 
+def signal_topography(dataset, channels, values):
+    """Render the selected signal samples' channel means, in microvolts."""
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
+    from eegprep.functions.sigprocfunc.topoplot import topoplot
+
+    figure = Figure(figsize=(4.8, 4), dpi=100, facecolor="white")
+    canvas = FigureCanvasAgg(figure)
+    axes = figure.add_axes([0.04, 0.05, 0.76, 0.9])
+    limit = max(float(np.max(np.abs(values))), np.finfo(float).eps)
+    topoplot(
+        values,
+        [dataset.chanlocs[i] for i in channels],
+        axes=axes,
+        colormap="RdBu_r",
+        maplimits=[-limit, limit],
+    )
+    axes.set_axis_off()
+    colorbar = figure.add_axes([0.80, 0.15, 0.03, 0.7])
+    figure.colorbar(ScalarMappable(norm=Normalize(-limit, limit), cmap="RdBu_r"), cax=colorbar, label="µV")
+    canvas.draw()
+    return np.asarray(canvas.buffer_rgba()).copy()
+
+
 def export_set(session, path: str | Path):
     from eegprep import pop_rejepoch, pop_saveset, pop_select
     from eegprep.functions.popfunc.eeg_eegrej import eeg_eegrej

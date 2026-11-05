@@ -109,13 +109,13 @@ def test_recommendation_navigation_feedback_and_undo_preserve_human_labels():
     session.mark([0], True)
     session.mark([1], False)
     window.show()
-    dock = window.epochrank
-    dock.show()
+    dock = window.epochrank.tracks[0]
+    dock.method.setCurrentIndex(dock.method.findData("similarity"))
     try:
         wait_for(app, window, lambda: dock.ranking is not None)
         before = session.review.decisions
         chosen = int(dock.ranking.epochs[0])
-        dock._select(dock.items.item(0))
+        dock.select_epoch(chosen)
         wait_for(app, window, lambda: window.current_epoch == chosen)
         assert session.review.decisions == before
         assert [window.navigator.row(i) for i in window.navigator.selectedItems()] == [chosen]
@@ -129,9 +129,9 @@ def test_recommendation_navigation_feedback_and_undo_preserve_human_labels():
         assert chosen in dock.ranking.epochs
         assert session.review.decisions == before
         window._propose(Processing(average_reference=True))
-        assert dock.ranking is None and not dock.items.count()
+        assert dock.ranking is None and not np.isfinite(dock.rail.values).any()
         window.adopt()
-        assert dock.ranking is None and "先标记" in dock.status.text()
+        assert dock.ranking is None and "Reject at least" in dock.status.text()
     finally:
         window.close()
         wait_for(app, window, lambda: True)
@@ -156,22 +156,28 @@ def test_dataset_switch_discards_inflight_ranking(monkeypatch):
     window.set_dataset(make_demo(18, 8, 100.0, 1.0))
     window.session.mark([0], True)
     window.show()
-    window.epochrank.show()
+    track = window.epochrank.tracks[0]
+    track.method.setCurrentIndex(track.method.findData("similarity"))
     try:
-        assert started.wait(5)
+        deadline = monotonic() + 5
+        while not started.is_set() and monotonic() < deadline:
+            app.processEvents()
+            sleep(0.005)
+        assert started.is_set()
         first = window.session.dataset.data_id
         window.set_dataset(make_demo(18, 10, 100.0, 1.0, seed=19))
         session = window.session
         session.mark([3], True)
         window._changed()
+        window.epochrank.show()
         release.set()
-        wait_for(app, window, lambda: window.epochrank.ranking is not None)
+        wait_for(app, window, lambda: track.ranking is not None)
         expected = rank_epochs(
             epoch_vectors(session.engine, session.review.processing), feedback(session.review)
         )
-        np.testing.assert_array_equal(window.epochrank.ranking.epochs, expected.epochs)
+        np.testing.assert_array_equal(track.ranking.epochs, expected.epochs)
         assert calls == [first, session.dataset.data_id]
-        assert 0 in window.epochrank.ranking.epochs and 3 not in window.epochrank.ranking.epochs
+        assert 0 in track.ranking.epochs and 3 not in track.ranking.epochs
     finally:
         release.set()
         window.close()
