@@ -44,18 +44,62 @@ class Session:
     def mark(self, epochs, rejected: bool, reason="signal_artifact", note="", origin="human"):
         epochs = tuple(epochs)
         decisions = dict(self.review.decisions)
+        notes = dict(self.review.epoch_notes)
         for epoch in epochs:
+            previous = decisions.get(int(epoch))
+            text = note if note is not None else notes.get(int(epoch), previous.note if previous else "")
             decisions[int(epoch)] = EpochDecision(
                 rejected,
                 reason,
-                note,
+                text,
                 self.review.processing,
                 origin=origin,
                 suggestions_seen=self.suggestions.get(int(epoch), ()),
                 display_context=deepcopy(self.view_context),
                 review_mode="batch" if len(epochs) > 1 else "individual",
             )
-        self._commit(replace(self.review, decisions=tuple(sorted(decisions.items()))))
+            notes.pop(int(epoch), None)
+        self._commit(
+            replace(
+                self.review,
+                decisions=tuple(sorted(decisions.items())),
+                epoch_notes=tuple(sorted(notes.items())),
+            )
+        )
+
+    def set_epoch_notes(self, epochs, note):
+        """Editing a note does not create or renew a quality judgment."""
+        decisions, notes = dict(self.review.decisions), dict(self.review.epoch_notes)
+        for epoch in epochs:
+            if epoch in decisions:
+                decisions[epoch] = replace(decisions[epoch], note=note)
+            elif note:
+                notes[epoch] = note
+            else:
+                notes.pop(epoch, None)
+        candidate = self.candidate
+        self._commit(
+            replace(
+                self.review,
+                decisions=tuple(sorted(decisions.items())),
+                epoch_notes=tuple(sorted(notes.items())),
+            )
+        )
+        self.candidate = candidate
+
+    def clear_epoch_decisions(self, epochs):
+        decisions, notes = dict(self.review.decisions), dict(self.review.epoch_notes)
+        for epoch in epochs:
+            decision = decisions.pop(epoch, None)
+            if decision is not None and decision.note:
+                notes[epoch] = decision.note
+        self._commit(
+            replace(
+                self.review,
+                decisions=tuple(sorted(decisions.items())),
+                epoch_notes=tuple(sorted(notes.items())),
+            )
+        )
 
     def mark_interval(self, start, stop, rejected=True, reason="signal_artifact", note=""):
         if not self.dataset.continuous:

@@ -65,6 +65,7 @@ class Review:
     rating: str = "待复核"
     note: str = ""
     intervals: tuple[IntervalDecision, ...] = ()
+    epoch_notes: tuple[tuple[int, str], ...] = ()
 
     @property
     def rejected(self) -> frozenset[int]:
@@ -76,8 +77,21 @@ class Review:
 
     @property
     def pending_review_count(self):
-        return sum(d.processing != self.processing for _, d in self.decisions) + sum(
-            d.processing != self.processing for d in self.intervals
+        return sum(
+            d.processing != self.processing or d.reason == "uncertain" for _, d in self.decisions
+        ) + sum(d.processing != self.processing for d in self.intervals)
+
+    def epoch_counts(self, total):
+        current = [d for _, d in self.decisions if d.processing == self.processing]
+        deferred = sum(d.reason == "uncertain" for d in current)
+        stale = len(self.decisions) - len(current)
+        return dict(
+            checked=len(current) - deferred,
+            deferred=deferred,
+            stale=stale,
+            unseen=total - len(self.decisions),
+            rejected=len(self.rejected),
+            retained=sum(not d.rejected and d.reason != "uncertain" for d in current),
         )
 
     def record(self):

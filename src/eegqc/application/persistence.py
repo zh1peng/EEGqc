@@ -155,7 +155,12 @@ def _review(record):
         for d in record.get("intervals", [])
     )
     return Review(
-        _processing(record["processing"]), tuple(decisions), record["rating"], record["note"], intervals
+        _processing(record["processing"]),
+        tuple(decisions),
+        record["rating"],
+        record["note"],
+        intervals,
+        tuple((int(i), text) for i, text in record.get("epoch_notes", [])),
     )
 
 
