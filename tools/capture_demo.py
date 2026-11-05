@@ -30,7 +30,6 @@ def main():
     window.jobs.failed.disconnect()
     window.jobs.failed.connect(errors.append)
     window.set_dataset(make_demo())
-    window.set_workspace(0)
     window.resize(1560, 1060)
     window.show()
     window.session.propose(Processing(excluded_ics=(0,)))
@@ -53,13 +52,7 @@ def main():
             print("UI errors:", errors)
             window.close()
             app.exit(1)
-        elif (
-            window.jobs.active is None
-            and not window.jobs.pending
-            and window.property_jobs.active is None
-            and not window.property_jobs.pending
-            and not window.render_timer.isActive()
-        ):
+        elif window.jobs.active is None and not window.jobs.pending and not window.render_timer.isActive():
             target = output / f"eegqc-{pages[stage][1]}.png"
             window.grab().save(str(target))
             print("Saved", target)

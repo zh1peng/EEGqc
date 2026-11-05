@@ -107,7 +107,7 @@ class EpochRail(QListWidget):
             state = self.item(index).data(Qt.ItemDataRole.UserRole) or "未检查"
             QToolTip.showText(
                 event.globalPosition().toPoint(),
-                f"Epoch {index + 1} / {self.count()} · {state}  |  拖动浏览 · Shift 选择范围",
+                f"{state} · {(index + 1) / self.count():.0%}  |  拖动浏览 · Shift 选择范围",
                 self,
             )
 
